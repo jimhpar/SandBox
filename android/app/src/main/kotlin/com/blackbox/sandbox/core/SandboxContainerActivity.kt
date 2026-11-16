@@ -1,17 +1,14 @@
 package com.blackbox.sandbox.core
 
 import android.app.Activity
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
-import java.io.File
 
 /**
  * SandboxContainerActivity
  * Isolated container host for cloned applications.
- * Directly launches the instance or alerts if deleted.
+ * Directly routes launch to SandboxManager to ensure Work Profile / isolated environment execution.
  */
 class SandboxContainerActivity : Activity() {
 
@@ -29,46 +26,11 @@ class SandboxContainerActivity : Activity() {
             return
         }
 
-        // Verify that the instance still exists by checking the shared JSON file
-        val instancesFile = File(filesDir, "sandbox_instances.json")
-        if (instancesFile.exists()) {
-            val json = instancesFile.readText()
-            if (!json.contains(instanceId)) {
-                Toast.makeText(this, "This cloned app has been deleted from Sandbox.", Toast.LENGTH_LONG).show()
-                finish()
-                return
-            }
+        val sandboxManager = SandboxManager.getInstance(applicationContext)
+        val success = sandboxManager.launchApp(instanceId, packageName)
+        if (!success) {
+            Toast.makeText(this, "Failed to launch $packageName in isolated Sandbox.", Toast.LENGTH_SHORT).show()
         }
-
-        launchIsolatedApp(packageName, instanceId)
-    }
-
-    private fun launchIsolatedApp(targetPkg: String, instanceId: String) {
-        try {
-            val pm = packageManager
-            val launchIntent = pm.getLaunchIntentForPackage(targetPkg)
-
-            if (launchIntent == null) {
-                Toast.makeText(this, "Could not find launcher for $targetPkg", Toast.LENGTH_SHORT).show()
-                finish()
-                return
-            }
-
-            launchIntent.addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or
-                Intent.FLAG_ACTIVITY_MULTIPLE_TASK or
-                Intent.FLAG_ACTIVITY_NO_ANIMATION
-            )
-            launchIntent.putExtra("is_sandbox_clone", true)
-            launchIntent.putExtra("sandbox_instance_id", instanceId)
-            launchIntent.putExtra("sandbox_isolated_vfs", true)
-
-            startActivity(launchIntent)
-            finish()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error launching target package: $targetPkg", e)
-            Toast.makeText(this, "Failed to launch $targetPkg in Sandbox", Toast.LENGTH_SHORT).show()
-            finish()
-        }
+        finish()
     }
 }

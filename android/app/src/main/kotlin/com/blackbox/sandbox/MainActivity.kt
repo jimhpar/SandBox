@@ -14,9 +14,7 @@ class MainActivity : FlutterActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (!::sandboxManager.isInitialized) {
-            sandboxManager = SandboxManager(applicationContext)
-        }
+        sandboxManager = SandboxManager.getInstance(applicationContext)
         handleShortcutIntent()
     }
 
@@ -33,7 +31,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        sandboxManager = SandboxManager(applicationContext)
+        sandboxManager = SandboxManager.getInstance(applicationContext)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {

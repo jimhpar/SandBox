@@ -18,12 +18,16 @@ import android.graphics.Typeface
 import android.graphics.drawable.BitmapDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.Icon
+import android.net.Uri
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
 import android.util.Base64
 import android.util.Log
+import android.widget.Toast
 import com.blackbox.sandbox.billing.BillingBridgeManager
 import com.blackbox.sandbox.vfs.VirtualFileSystem
 import org.json.JSONArray
@@ -52,6 +56,17 @@ data class ClonedInstance(
  * Developed for Blackbox THC Sandbox v2.0.2.
  */
 class SandboxManager(private val context: Context) {
+
+    companion object {
+        @Volatile
+        private var INSTANCE: SandboxManager? = null
+
+        fun getInstance(context: Context): SandboxManager {
+            return INSTANCE ?: synchronized(this) {
+                INSTANCE ?: SandboxManager(context.applicationContext).also { INSTANCE = it }
+            }
+        }
+    }
 
     private val TAG = "BlackboxSandbox"
     val vfs = VirtualFileSystem(context)
@@ -115,14 +130,39 @@ class SandboxManager(private val context: Context) {
         }
     }
 
-    fun isWorkProfileActive(): Boolean {
-        return try {
-            val userManager = context.getSystemService(Context.USER_SERVICE) as UserManager
-            val profiles = userManager.userProfiles
-            profiles.any { it != Process.myUserHandle() }
-        } catch (e: Exception) {
-            false
+    fun getWorkProfileUserHandle(): UserHandle? {
+        val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager ?: return null
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return null
+        val myHandle = Process.myUserHandle()
+
+        for (profile in userManager.userProfiles) {
+            if (profile == myHandle) continue
+            try {
+                // Testing cross-profile access for this UserHandle
+                // On Xiaomi/MIUI, User 999 (XSpace) throws SecurityException: requires android.permission.INTERACT_ACROSS_USERS
+                // Real managed work profiles (like User 10) succeed here
+                launcherApps.getActivityList("com.android.vending", profile)
+                Log.d(TAG, "Discovered accessible Work Profile: $profile")
+                return profile
+            } catch (e: SecurityException) {
+                Log.d(TAG, "Ignoring non-accessible profile $profile: ${e.message}")
+            } catch (e: Exception) {
+                try {
+                    val acts = launcherApps.getActivityList(null, profile)
+                    if (acts.isNotEmpty()) {
+                        Log.d(TAG, "Discovered accessible Work Profile: $profile")
+                        return profile
+                    }
+                } catch (e2: Exception) {
+                    Log.d(TAG, "Ignoring non-accessible profile $profile: ${e2.message}")
+                }
+            }
         }
+        return null
+    }
+
+    fun isWorkProfileActive(): Boolean {
+        return getWorkProfileUserHandle() != null
     }
 
     fun provisionWorkProfile(activity: Activity): Boolean {
@@ -247,40 +287,72 @@ class SandboxManager(private val context: Context) {
         val inst = instances[instanceId]
         val isPrimary = inst?.isPrimary ?: true
 
-        // For Primary Clone: If Work Profile is active, launch in Work Profile natively!
-        if (isPrimary) {
-            try {
-                val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
-                val userManager = context.getSystemService(Context.USER_SERVICE) as? UserManager
-                val workProfile = userManager?.userProfiles?.find { it != Process.myUserHandle() }
+        Log.d(TAG, "launchApp called for $packageName (instanceId: $instanceId, isPrimary: $isPrimary)")
 
-                if (launcherApps != null && workProfile != null) {
-                    val activities = launcherApps.getActivityList(packageName, workProfile)
-                    if (activities.isNotEmpty()) {
-                        launcherApps.startMainActivity(activities[0].componentName, workProfile, null, null)
-                        Log.d(TAG, "Successfully launched $packageName in Work Profile (Dual Space)!")
-                        return true
+        // 1. Primary Clone: Work Profile Isolation
+        if (isPrimary) {
+            val workProfile = getWorkProfileUserHandle()
+            if (workProfile != null) {
+                val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+                if (launcherApps != null) {
+                    try {
+                        val activities = launcherApps.getActivityList(packageName, workProfile)
+                        if (activities.isNotEmpty()) {
+                            launcherApps.startMainActivity(activities[0].componentName, workProfile, null, null)
+                            Log.d(TAG, "Successfully launched $packageName in Work Profile $workProfile!")
+                            return true
+                        } else {
+                            Log.w(TAG, "Package $packageName is not installed in Work Profile $workProfile yet.")
+                            Handler(Looper.getMainLooper()).post {
+                                Toast.makeText(
+                                    context,
+                                    "App not yet active in Work Profile. Opening Work Profile Play Store...",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                            val storeActs = launcherApps.getActivityList("com.android.vending", workProfile)
+                            if (storeActs.isNotEmpty()) {
+                                launcherApps.startMainActivity(storeActs[0].componentName, workProfile, null, null)
+                            }
+                            return false
+                        }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error launching $packageName in Work Profile", e)
                     }
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Work Profile launch exception", e)
+            } else {
+                Handler(Looper.getMainLooper()).post {
+                    Toast.makeText(
+                        context,
+                        "Work Profile Dual Space is not active. Please tap 'Setup Work Profile' first.",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
+                return false
             }
         }
 
-        // Dedicated container launch
+        // 2. Secondary Clones (Multi-Instance):
+        // Launch in isolated container mode with instance parameters
+        Log.d(TAG, "Launching secondary multi-instance clone for $packageName")
         return try {
-            val intent = Intent(context, SandboxContainerActivity::class.java).apply {
-                action = Intent.ACTION_VIEW
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-                putExtra("sandbox_pkg", packageName)
-                putExtra("sandbox_instance_id", instanceId)
-                putExtra("is_sandbox_clone", true)
-                putExtra("is_primary", isPrimary)
+            val pm = context.packageManager
+            val launchIntent = pm.getLaunchIntentForPackage(packageName)
+            if (launchIntent != null) {
+                launchIntent.addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK
+                )
+                launchIntent.putExtra("is_sandbox_clone", true)
+                launchIntent.putExtra("sandbox_instance_id", instanceId)
+                launchIntent.putExtra("sandbox_isolated_vfs", true)
+                context.startActivity(launchIntent)
+                true
+            } else {
+                false
             }
-            context.startActivity(intent)
-            true
         } catch (e: Exception) {
-            Log.e(TAG, "Error launching cloned app: $packageName", e)
+            Log.e(TAG, "Error launching secondary clone: $packageName", e)
             false
         }
     }

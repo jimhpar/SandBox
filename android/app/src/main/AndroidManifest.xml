@@ -39,11 +39,10 @@
             </intent-filter>
         </activity>
 
-        <!-- Isolated container activity running in dedicated process -->
+        <!-- Isolated container activity -->
         <activity
             android:name=".core.SandboxContainerActivity"
             android:exported="true"
-            android:process=":sandbox_clone"
             android:taskAffinity="com.blackbox.sandbox.container"
             android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"

@@ -272,14 +272,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   width: 36,
                   height: 36,
                   fit: BoxFit.cover,
-                  errorBuilder: (_, _, _) => Container(
+                  errorBuilder: (_, _, _) => Image.asset(
+                    'assets/icon/app_icon.png',
                     width: 36,
                     height: 36,
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF00E5FF).withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(9),
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => Container(
+                      width: 36,
+                      height: 36,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF00E5FF).withValues(alpha: 0.15),
+                        borderRadius: BorderRadius.circular(9),
+                      ),
+                      child: const Icon(Icons.shield_outlined, color: Color(0xFF00E5FF), size: 22),
                     ),
-                    child: const Icon(Icons.shield_outlined, color: Color(0xFF00E5FF), size: 22),
                   ),
                 ),
               ),
@@ -360,7 +366,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                               ),
                               const SizedBox(height: 8),
                               Text(
-                                "Tap '+ Add App' below to clone and isolate an app or game.",
+                                "Tap '+ CLONE APP' below to clone and isolate an app or game.",
                                 textAlign: TextAlign.center,
                                 style: TextStyle(color: Colors.grey[400], fontSize: 13),
                               ),
