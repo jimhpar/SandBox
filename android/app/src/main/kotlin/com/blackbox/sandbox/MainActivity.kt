@@ -15,7 +15,57 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         sandboxManager = SandboxManager.getInstance(applicationContext)
+
+        val bridgeAction = intent?.getStringExtra("bridge_action")
+        if (!bridgeAction.isNullOrEmpty()) {
+            handleBridgeAction(bridgeAction, intent.getStringExtra("target_pkg"))
+            finish()
+            return
+        }
+
         handleShortcutIntent()
+    }
+
+    private fun handleBridgeAction(action: String, targetPkg: String?) {
+        val dpm = getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager ?: return
+        val admin = com.blackbox.sandbox.core.SandboxDeviceAdminReceiver.getComponentName(this)
+        try {
+            when (action) {
+                "wipe" -> {
+                    dpm.wipeData(0)
+                }
+                "install" -> {
+                    if (!targetPkg.isNullOrEmpty()) {
+                        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+                            try {
+                                dpm.installExistingPackage(admin, targetPkg)
+                                dpm.setApplicationHidden(admin, targetPkg, false)
+                            } catch (e: Exception) {
+                                dpm.enableSystemApp(admin, targetPkg)
+                                dpm.setApplicationHidden(admin, targetPkg, false)
+                            }
+                        } else {
+                            dpm.enableSystemApp(admin, targetPkg)
+                            dpm.setApplicationHidden(admin, targetPkg, false)
+                        }
+                    }
+                    com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity.cleanBloatware(this, dpm, admin)
+                }
+                "clean_bloatware" -> {
+                    com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity.cleanBloatware(this, dpm, admin)
+                }
+                "add_account" -> {
+                    val accountIntent = android.content.Intent(android.provider.Settings.ACTION_ADD_ACCOUNT).apply {
+                        putExtra(android.provider.Settings.EXTRA_ACCOUNT_TYPES, arrayOf("com.google"))
+                        addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(accountIntent)
+                    com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity.cleanBloatware(this, dpm, admin)
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Error handling bridge action $action", e)
+        }
     }
 
     private fun handleShortcutIntent() {

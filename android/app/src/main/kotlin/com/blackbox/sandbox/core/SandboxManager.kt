@@ -192,6 +192,8 @@ class SandboxManager(private val context: Context) {
         val workProfile = getWorkProfileUserHandle()
         if (workProfile == null) {
             Log.d(TAG, "No active Work Profile to remove.")
+            instances.clear()
+            savePersistedInstances()
             return true
         }
 
@@ -201,21 +203,49 @@ class SandboxManager(private val context: Context) {
                 val extras = Bundle().apply {
                     putString("bridge_action", "wipe")
                 }
-                launcherApps.startMainActivity(
-                    ComponentName(context.packageName, "com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity"),
-                    workProfile,
-                    null,
-                    extras
-                )
-                Log.d(TAG, "Sent wipe command to Work Profile Bridge Activity.")
+                var sent = false
+                try {
+                    launcherApps.startMainActivity(
+                        ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
+                        workProfile,
+                        null,
+                        extras
+                    )
+                    sent = true
+                    Log.d(TAG, "Dispatched wipe to MainActivity in Work Profile")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Could not start MainActivity for wipe: ${e.message}")
+                }
+
+                instances.clear()
+                savePersistedInstances()
+                return sent
             }
-            instances.clear()
-            savePersistedInstances()
-            return true
         } catch (e: Exception) {
             Log.e(TAG, "Error requesting Work Profile removal", e)
         }
         return false
+    }
+
+    fun cleanWorkProfileBloatware(): Boolean {
+        val workProfile = getWorkProfileUserHandle() ?: return false
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return false
+        return try {
+            val extras = Bundle().apply {
+                putString("bridge_action", "clean_bloatware")
+            }
+            launcherApps.startMainActivity(
+                ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
+                workProfile,
+                null,
+                extras
+            )
+            Log.d(TAG, "Dispatched clean_bloatware to Work Profile.")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "cleanWorkProfileBloatware: ${e.message}")
+            false
+        }
     }
 
     fun openWorkProfileAddAccount(): Boolean {
@@ -227,12 +257,12 @@ class SandboxManager(private val context: Context) {
                 putString("bridge_action", "add_account")
             }
             launcherApps.startMainActivity(
-                ComponentName(context.packageName, "com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity"),
+                ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
                 workProfile,
                 null,
                 extras
             )
-            Log.d(TAG, "Sent add_account command to Work Profile Bridge Activity.")
+            Log.d(TAG, "Sent add_account command to Work Profile.")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Error opening Work Profile add account", e)
@@ -256,7 +286,7 @@ class SandboxManager(private val context: Context) {
                 putString("target_pkg", packageName)
             }
             launcherApps.startMainActivity(
-                ComponentName(context.packageName, "com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity"),
+                ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
                 workProfile,
                 null,
                 extras
@@ -273,16 +303,15 @@ class SandboxManager(private val context: Context) {
         val workProfile = getWorkProfileUserHandle() ?: return emptyList()
         val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return emptyList()
 
-        val corePackages = setOf(
+        // Asynchronously clean bloatware if any
+        try {
+            cleanWorkProfileBloatware()
+        } catch (_: Exception) {}
+
+        // Strict whitelist: Only Google Play Store and Play Games are shown in WORK SPACE
+        val allowedCorePackages = setOf(
             "com.android.vending",
-            "com.google.android.gms",
-            "com.google.android.contacts",
-            "com.android.contacts",
-            "com.google.android.documentsui",
-            "com.android.documentsui",
-            "com.google.android.gm",
-            "com.android.dialer",
-            "com.google.android.dialer"
+            "com.google.android.play.games"
         )
 
         val resultList = mutableListOf<Map<String, Any>>()
@@ -291,10 +320,7 @@ class SandboxManager(private val context: Context) {
             val activities = launcherApps.getActivityList(null, workProfile)
             for (act in activities) {
                 val pkgName = act.applicationInfo.packageName
-                if (pkgName == context.packageName) continue
-
-                val isCore = corePackages.contains(pkgName) || (act.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
-                if (isCore) {
+                if (allowedCorePackages.contains(pkgName)) {
                     val label = act.label.toString()
                     val iconDrawable = act.getBadgedIcon(0)
                     val iconBase64 = drawableToBase64(iconDrawable)

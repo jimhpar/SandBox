@@ -2,8 +2,10 @@ package com.blackbox.sandbox.core
 
 import android.app.Activity
 import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -17,6 +19,7 @@ import android.widget.Toast
  * - Offline instant APK provisioning via installExistingPackage
  * - Work Profile complete unprovisioning/wiping via wipeData
  * - Work Profile Google Account sign-in via Settings.ACTION_ADD_ACCOUNT
+ * - Automatic OEM bloatware & system app hiding (Music, Compass, Camera, etc.)
  */
 class SandboxWorkProfileBridgeActivity : Activity() {
 
@@ -45,16 +48,23 @@ class SandboxWorkProfileBridgeActivity : Activity() {
                             } catch (e: Exception) {
                                 Log.w(TAG, "installExistingPackage failed, attempting enableSystemApp: ${e.message}")
                                 dpm.enableSystemApp(admin, targetPkg)
+                                dpm.setApplicationHidden(admin, targetPkg, false)
                             }
                         } else {
                             dpm.enableSystemApp(admin, targetPkg)
+                            dpm.setApplicationHidden(admin, targetPkg, false)
                         }
                     }
+                    cleanBloatware(this, dpm, admin)
                 }
                 "wipe" -> {
                     Log.w(TAG, "Executing Work Profile wipeData(0)...")
                     Toast.makeText(this, "Removing Sandbox Work Profile...", Toast.LENGTH_SHORT).show()
                     dpm.wipeData(0)
+                }
+                "clean_bloatware" -> {
+                    Log.d(TAG, "Cleaning OEM bloatware from profile...")
+                    cleanBloatware(this, dpm, admin)
                 }
                 "add_account" -> {
                     Log.d(TAG, "Opening Google Account sign-in in Work Profile...")
@@ -63,6 +73,7 @@ class SandboxWorkProfileBridgeActivity : Activity() {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
                     startActivity(accountIntent)
+                    cleanBloatware(this, dpm, admin)
                 }
                 "open_play_store" -> {
                     val storeIntent = Intent(Intent.ACTION_VIEW).apply {
@@ -71,11 +82,47 @@ class SandboxWorkProfileBridgeActivity : Activity() {
                     }
                     startActivity(storeIntent)
                 }
+                else -> {
+                    cleanBloatware(this, dpm, admin)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error executing bridge action $action", e)
         }
 
         finish()
+    }
+
+    companion object {
+        fun cleanBloatware(context: Context, dpm: DevicePolicyManager, admin: ComponentName) {
+            try {
+                val pm = context.packageManager
+                val installedApps = pm.getInstalledApplications(0)
+                val keepPackages = setOf(
+                    "com.android.vending",
+                    "com.google.android.gms",
+                    "com.google.android.gsf",
+                    "com.google.android.play.games",
+                    context.packageName
+                )
+
+                for (app in installedApps) {
+                    val pkg = app.packageName
+                    val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0 || (app.flags and ApplicationInfo.FLAG_UPDATED_SYSTEM_APP) != 0
+                    if (isSystem && !keepPackages.contains(pkg)) {
+                        try {
+                            if (!dpm.isApplicationHidden(admin, pkg)) {
+                                dpm.setApplicationHidden(admin, pkg, true)
+                                Log.d("SandboxBridge", "Hidden OEM bloatware app from profile: $pkg")
+                            }
+                        } catch (e: Exception) {
+                            Log.w("SandboxBridge", "Could not hide $pkg: ${e.message}")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("SandboxBridge", "Error in cleanBloatware", e)
+            }
+        }
     }
 }

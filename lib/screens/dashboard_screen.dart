@@ -23,6 +23,9 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   void initState() {
     super.initState();
     _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(() {
+      if (mounted) setState(() {});
+    });
     _loadData();
   }
 
@@ -357,7 +360,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
                   ),
                 ),
                 Text(
-                  "v2.0.3 • Blackbox THC",
+                  "v2.0.4 • Blackbox THC",
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 11,
@@ -442,10 +445,40 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Text(
+                  "CLONED APPS (${_instances.length})",
+                  style: const TextStyle(
+                    color: Colors.grey,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.2,
+                    fontSize: 13,
+                  ),
+                ),
+                ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF00E5FF).withValues(alpha: 0.15),
+                    foregroundColor: const Color(0xFF00E5FF),
+                    side: const BorderSide(color: Color(0xFF00E5FF), width: 1),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  ),
+                  icon: const Icon(Icons.add, size: 16),
+                  label: const Text(
+                    "CLONE APP",
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
+                  ),
+                  onPressed: _showCloneModal,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
             if (_instances.isEmpty)
               Center(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 80),
+                  padding: const EdgeInsets.symmetric(vertical: 60),
                   child: Column(
                     children: [
                       Icon(Icons.layers_clear_outlined, color: Colors.grey[600], size: 64),
@@ -456,9 +489,24 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Tap '+ CLONE APP' below to clone and isolate an app or game.",
+                        "Tap '+ CLONE APP' to isolate and run an app or game.",
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey[400], fontSize: 13),
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton.icon(
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF00E5FF),
+                          foregroundColor: Colors.black,
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
+                        ),
+                        icon: const Icon(Icons.add, fontWeight: FontWeight.w900),
+                        label: const Text(
+                          "CLONE FIRST APP",
+                          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
+                        ),
+                        onPressed: _showCloneModal,
                       ),
                     ],
                   ),

@@ -10,7 +10,8 @@ import android.util.Log
 /**
  * SandboxDeviceAdminReceiver
  * Enables Work Profile provisioning (Island / Shelter style) for Blackbox THC Sandbox.
- * Automatically activates Google Play Store and Google Play Services inside the isolated Work Profile.
+ * Automatically activates Google Play Store and Google Play Services inside the isolated Work Profile
+ * and hides OEM system bloatware to prevent launcher clutter.
  */
 class SandboxDeviceAdminReceiver : DeviceAdminReceiver() {
 
@@ -32,6 +33,12 @@ class SandboxDeviceAdminReceiver : DeviceAdminReceiver() {
             dpm.enableSystemApp(admin, "com.android.vending")
             dpm.enableSystemApp(admin, "com.google.android.gms")
             dpm.enableSystemApp(admin, "com.google.android.gsf")
+            try {
+                dpm.enableSystemApp(admin, "com.google.android.play.games")
+            } catch (_: Exception) {}
+
+            // Immediately hide unwanted OEM bloatware so device home screen stays clean
+            SandboxWorkProfileBridgeActivity.cleanBloatware(context, dpm, admin)
 
             Log.d(TAG, "Google Play Store & GMS successfully enabled in Work Profile.")
         } catch (e: Exception) {
