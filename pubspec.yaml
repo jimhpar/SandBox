@@ -1,8 +1,8 @@
 name: sandbox
-description: "Sandbox v2.1.1 by Blackbox THC - True Offline APK Repackaging Cloner & Isolated Dual Space"
+description: "Sandbox v2.2.0 by Blackbox THC - In-App Virtualization Engine (BlackBox Bcore) & Dual Space"
 publish_to: 'none'
 
-version: 2.1.1+211
+version: 2.2.0+220
 
 environment:
   sdk: ^3.13.7

@@ -393,7 +393,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                 ),
                 Text(
-                  "v2.1.1 • Blackbox THC",
+                  "v2.2.0 • Blackbox THC",
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 11,
@@ -1306,10 +1306,6 @@ class _DashboardScreenState extends State<DashboardScreen>
                 style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0, fontSize: 14),
               ),
               onPressed: () async {
-                if (!inst.isStandaloneClone && inst.isPrimary && _servicesStatus['workProfileActive'] != true) {
-                  _promptSetupWorkProfile(inst);
-                  return;
-                }
                 _showHudNotification(
                   "Launching ${inst.appName}...",
                   icon: Icons.rocket_launch,
@@ -1329,52 +1325,6 @@ class _DashboardScreenState extends State<DashboardScreen>
         ],
       ),
     );
-  }
-
-  void _promptSetupWorkProfile(ClonedInstance inst) async {
-    final setup = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: const Color(0xFF161926),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: const [
-            Icon(Icons.security, color: Color(0xFFFF6D00)),
-            SizedBox(width: 10),
-            Expanded(
-              child: Text(
-                "Activate Dual Space?",
-                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17),
-              ),
-            ),
-          ],
-        ),
-        content: Text(
-          "To run '${inst.appName}' with an isolated Google Play account and separate app data, Dual Space Work Profile must be active.\n\nSet up Work Profile now?",
-          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text("LATER", style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton.icon(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFFFF6D00),
-              foregroundColor: Colors.white,
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            ),
-            icon: const Icon(Icons.add_moderator, size: 18),
-            label: const Text("SETUP WORK PROFILE", style: TextStyle(fontWeight: FontWeight.bold)),
-            onPressed: () => Navigator.pop(context, true),
-          ),
-        ],
-      ),
-    );
-
-    if (setup == true) {
-      await _service.provisionWorkProfile();
-    }
   }
 
   Widget _buildBadgedIcon(String iconBase64, String badgeColorHex) {

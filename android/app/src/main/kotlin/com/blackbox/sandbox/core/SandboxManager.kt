@@ -32,6 +32,7 @@ import android.util.Log
 import android.widget.Toast
 import com.blackbox.sandbox.billing.BillingBridgeManager
 import com.blackbox.sandbox.vfs.VirtualFileSystem
+import top.niunaijun.blackbox.BlackBoxCore
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
@@ -49,14 +50,16 @@ data class ClonedInstance(
     val iconBase64: String = "",
     val isPrimary: Boolean = true,
     val badgeColor: String = "#FF6D00",
-    val clonedPackageName: String = packageName
+    val clonedPackageName: String = packageName,
+    val virtualUserId: Int = 0
 )
 
 /**
- * SandboxManager (Hybrid Offline APK Cloner + Work Profile Engine)
- * - Standalone APK Cloner: Copies device APK offline, renames package (.sb1, .sb2...), signs v2/v3, installs independently.
+ * SandboxManager (BlackBox User-Space Virtualization + Work Profile Engine)
+ * - In-App Virtualization (BlackBox Bcore): Runs apps directly inside Sandbox with original packageName & isolated data.
+ *   Zero APK installation prompt, zero Unknown Sources, unlimited clones (userId 0, 1, 2...).
  * - Work Profile (Optional): Native GMS & Play Store isolation.
- * Developed for Blackbox THC Sandbox v2.1.0.
+ * Developed for Blackbox THC Sandbox v2.2.0.
  */
 class SandboxManager(private val context: Context) {
 
@@ -74,7 +77,6 @@ class SandboxManager(private val context: Context) {
     private val TAG = "BlackboxSandbox"
     val vfs = VirtualFileSystem(context)
     val billingBridge = BillingBridgeManager(context)
-    private val apkCloner = ApkClonerEngine(context)
     private val cloneExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val instancesFile = File(context.filesDir, "sandbox_instances.json")
 
@@ -83,73 +85,10 @@ class SandboxManager(private val context: Context) {
     @Volatile
     var cloneProgressListener: ((Map<String, Any>) -> Unit)? = null
 
-    private var pendingCloneMeta: ClonedInstance? = null
-
-    private val installStatusReceiver = object : android.content.BroadcastReceiver() {
-        override fun onReceive(ctx: Context, intent: Intent) {
-            if (intent.action != ApkClonerEngine.ACTION_INSTALL_STATUS) return
-            val status = intent.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -1)
-            val msg = intent.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""
-            val clonedPkg = intent.getStringExtra("cloned_pkg") ?: ""
-            Log.d(TAG, "PackageInstaller status=$status for $clonedPkg msg=$msg")
-
-            when (status) {
-                android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION -> {
-                    val confirmIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                        intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
-                    } else {
-                        @Suppress("DEPRECATION")
-                        intent.getParcelableExtra(Intent.EXTRA_INTENT)
-                    }
-                    if (confirmIntent != null) {
-                        confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        try {
-                            context.startActivity(confirmIntent)
-                            emitCloneProgress(0.90, "Confirm Android install prompt...", false, true)
-                        } catch (e: Exception) {
-                            Log.e(TAG, "Failed to start install confirmation", e)
-                            emitCloneProgress(1.0, "Install prompt error: ${e.message}", true, false)
-                        }
-                    }
-                }
-                android.content.pm.PackageInstaller.STATUS_SUCCESS -> {
-                    pendingCloneMeta?.let { meta ->
-                        if (meta.clonedPackageName == clonedPkg || clonedPkg.isEmpty()) {
-                            instances[meta.instanceId] = meta
-                            savePersistedInstances()
-                            createHomeScreenShortcut(meta.instanceId, meta.clonedPackageName, meta.appName, meta.badgeColor)
-                            pendingCloneMeta = null
-                        }
-                    }
-                    emitCloneProgress(1.0, "Cloned app installed & ready!", true, true)
-                }
-                else -> {
-                    pendingCloneMeta = null
-                    val errText = if (msg.isNotEmpty()) msg else "Installation failed (code $status)"
-                    emitCloneProgress(1.0, errText, true, false)
-                }
-            }
-        }
-    }
-
     init {
         loadPersistedInstances()
         billingBridge.bindHostBilling()
         ensureBridgeState()
-        registerInstallReceiver()
-    }
-
-    private fun registerInstallReceiver() {
-        try {
-            val filter = android.content.IntentFilter(ApkClonerEngine.ACTION_INSTALL_STATUS)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                context.registerReceiver(installStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            } else {
-                context.registerReceiver(installStatusReceiver, filter)
-            }
-        } catch (e: Exception) {
-            Log.w(TAG, "registerInstallReceiver warning: ${e.message}")
-        }
     }
 
     private fun emitCloneProgress(progress: Double, message: String, done: Boolean, success: Boolean) {
@@ -206,9 +145,12 @@ class SandboxManager(private val context: Context) {
                     iconBase64 = obj.optString("iconBase64", ""),
                     isPrimary = obj.optBoolean("isPrimary", true),
                     badgeColor = obj.optString("badgeColor", "#FF6D00"),
-                    clonedPackageName = obj.optString("clonedPackageName", pkg)
+                    clonedPackageName = obj.optString("clonedPackageName", pkg),
+                    virtualUserId = obj.optInt("virtualUserId", 0)
                 )
-                instances[inst.instanceId] = inst
+                if (inst.clonedPackageName == inst.packageName) {
+                    instances[inst.instanceId] = inst
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to load persisted instances", e)
@@ -223,6 +165,7 @@ class SandboxManager(private val context: Context) {
                     put("instanceId", inst.instanceId)
                     put("packageName", inst.packageName)
                     put("clonedPackageName", inst.clonedPackageName)
+                    put("virtualUserId", inst.virtualUserId)
                     put("appName", inst.appName)
                     put("fakeAndroidId", inst.fakeAndroidId)
                     put("fakeDeviceModel", inst.fakeDeviceModel)
@@ -518,24 +461,17 @@ class SandboxManager(private val context: Context) {
             val appInfo = pm.getApplicationInfo(packageName, 0)
             val baseAppName = pm.getApplicationLabel(appInfo).toString()
 
-            var cloneIdx = 1
-            while (true) {
-                val candidate = "$packageName.sb$cloneIdx"
-                val existsInInstances = instances.values.any { it.clonedPackageName == candidate }
-                val existsOnDevice = try {
-                    pm.getPackageInfo(candidate, 0)
-                    true
-                } catch (_: Exception) {
-                    false
-                }
-                if (!existsInInstances && !existsOnDevice) break
-                cloneIdx++
+            var userId = 0
+            while (instances.values.any { it.packageName == packageName && it.virtualUserId == userId } ||
+                try { BlackBoxCore.get().isInstalled(packageName, userId) } catch (_: Throwable) { false }
+            ) {
+                userId++
             }
 
-            val clonedPkg = "$packageName.sb$cloneIdx"
-            val isPrimary = (cloneIdx == 1)
+            val cloneNum = userId + 1
+            val isPrimary = (userId == 0)
             val badgeColor = if (isPrimary) "#FF6D00" else "#FF2D75"
-            val appName = if (!customName.isNullOrEmpty()) customName else "$baseAppName (SB$cloneIdx)"
+            val appName = if (!customName.isNullOrEmpty()) customName else "$baseAppName (SB$cloneNum)"
 
             val instanceId = UUID.randomUUID().toString().substring(0, 8)
             val fakeAndroidId = UUID.randomUUID().toString().replace("-", "").substring(0, 16)
@@ -558,18 +494,30 @@ class SandboxManager(private val context: Context) {
                 iconBase64 = iconBase64,
                 isPrimary = isPrimary,
                 badgeColor = badgeColor,
-                clonedPackageName = clonedPkg
+                clonedPackageName = packageName,
+                virtualUserId = userId
             )
-            pendingCloneMeta = meta
 
             cloneExecutor.execute {
-                emitCloneProgress(0.05, "Preparing offline clone for $baseAppName...", false, true)
-                val started = apkCloner.cloneAndInstallApk(packageName, clonedPkg, "SB$cloneIdx") { p, msg ->
-                    emitCloneProgress(p, msg, false, true)
-                }
-                if (!started) {
-                    pendingCloneMeta = null
-                    emitCloneProgress(1.0, "Failed to repackage $baseAppName APK.", true, false)
+                try {
+                    emitCloneProgress(0.15, "Copying $baseAppName from device into Sandbox...", false, true)
+                    val res = BlackBoxCore.get().installPackageAsUser(packageName, userId)
+                    if (res != null && res.success) {
+                        emitCloneProgress(0.80, "Configuring isolated virtual storage & shortcut...", false, true)
+                        instances[meta.instanceId] = meta
+                        savePersistedInstances()
+                        Handler(Looper.getMainLooper()).post {
+                            createHomeScreenShortcut(meta.instanceId, meta.packageName, meta.appName, meta.badgeColor)
+                        }
+                        emitCloneProgress(1.0, "$appName cloned & ready! (No install required)", true, true)
+                    } else {
+                        val errMsg = res?.msg ?: "Virtual install failed"
+                        Log.e(TAG, "BlackBox installPackageAsUser failed: $errMsg")
+                        emitCloneProgress(1.0, errMsg, true, false)
+                    }
+                } catch (e: Throwable) {
+                    Log.e(TAG, "BlackBox clone error", e)
+                    emitCloneProgress(1.0, "Clone error: ${e.message}", true, false)
                 }
             }
             true
@@ -717,28 +665,22 @@ class SandboxManager(private val context: Context) {
 
     fun launchApp(instanceId: String, packageName: String): Boolean {
         val inst = instances[instanceId]
-        val clonedPkg = inst?.clonedPackageName ?: packageName
+        val userId = inst?.virtualUserId ?: 0
         val isPrimary = inst?.isPrimary ?: true
 
-        Log.d(TAG, "launchApp called for $packageName (clonedPkg=$clonedPkg, instanceId=$instanceId, isPrimary=$isPrimary)")
+        Log.d(TAG, "launchApp called for $packageName (instanceId=$instanceId, userId=$userId, isPrimary=$isPrimary)")
 
-        // 0. Standalone Repackaged APK Clone (runs without Work Profile!)
-        if (clonedPkg != packageName) {
-            return try {
-                val pm = context.packageManager
-                val launchIntent = pm.getLaunchIntentForPackage(clonedPkg)
-                if (launchIntent != null) {
-                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
-                    context.startActivity(launchIntent)
-                    Log.d(TAG, "Launched standalone cloned package: $clonedPkg")
-                    true
-                } else {
-                    Log.w(TAG, "Standalone cloned package $clonedPkg is not installed on device")
-                    false
+        // 0. BlackBox In-App Virtualization Engine (runs without Work Profile or APK installation!)
+        if (instanceId != "core") {
+            try {
+                val bb = BlackBoxCore.get()
+                if (bb.isInstalled(packageName, userId)) {
+                    val launched = bb.launchApk(packageName, userId)
+                    Log.d(TAG, "BlackBoxCore.launchApk($packageName, userId=$userId) = $launched")
+                    if (launched) return true
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error launching standalone cloned package $clonedPkg", e)
-                false
+            } catch (e: Throwable) {
+                Log.e(TAG, "BlackBox launchApk error for $packageName", e)
             }
         }
 
@@ -898,6 +840,14 @@ class SandboxManager(private val context: Context) {
     }
 
     fun clearData(instanceId: String, packageName: String): Boolean {
+        val inst = instances[instanceId]
+        if (inst != null) {
+            try {
+                BlackBoxCore.get().clearPackage(packageName, inst.virtualUserId)
+            } catch (e: Throwable) {
+                Log.w(TAG, "BlackBox clearPackage error: ${e.message}")
+            }
+        }
         val success = vfs.wipeInstanceData(instanceId, packageName)
         vfs.getDataDir(instanceId, packageName)
         return success
@@ -919,15 +869,10 @@ class SandboxManager(private val context: Context) {
             }
         }
 
-        if (inst.clonedPackageName != inst.packageName) {
-            try {
-                val uninstallIntent = Intent(Intent.ACTION_DELETE, Uri.parse("package:${inst.clonedPackageName}")).apply {
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                }
-                context.startActivity(uninstallIntent)
-            } catch (e: Exception) {
-                Log.w(TAG, "Uninstall intent error for ${inst.clonedPackageName}: ${e.message}")
-            }
+        try {
+            BlackBoxCore.get().uninstallPackageAsUser(inst.packageName, inst.virtualUserId)
+        } catch (e: Throwable) {
+            Log.w(TAG, "BlackBox uninstallPackageAsUser warning: ${e.message}")
         }
 
         vfs.wipeInstanceData(inst.instanceId, inst.packageName)

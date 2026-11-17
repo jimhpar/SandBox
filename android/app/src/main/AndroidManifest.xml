@@ -15,7 +15,7 @@
 
     <application
         android:label="Sandbox"
-        android:name="${applicationName}"
+        android:name=".SandboxApplication"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true">
 

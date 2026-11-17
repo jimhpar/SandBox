@@ -31,6 +31,16 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     buildTypes {
@@ -53,5 +63,9 @@ flutter {
 }
 
 dependencies {
-    implementation("com.android.tools.build:apksig:8.5.2")
+    implementation(fileTree(mapOf("dir" to "libs", "include" to listOf("*.jar", "*.aar"))))
+    implementation("com.github.tiann:FreeReflection:3.2.2")
+    implementation("com.moandjiezana.toml:toml4j:0.7.2")
+    implementation("androidx.appcompat:appcompat:1.6.1")
+    implementation("com.google.android.material:material:1.9.0")
 }
