@@ -10,7 +10,8 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProviderStateMixin {
+class _DashboardScreenState extends State<DashboardScreen>
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   final SandboxService _service = SandboxService();
   late TabController _tabController;
 
@@ -22,6 +23,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
       if (mounted) setState(() {});
@@ -31,8 +33,16 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _loadData();
+    }
   }
 
   Future<void> _loadData() async {
@@ -360,7 +370,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
                   ),
                 ),
                 Text(
-                  "v2.0.4 • Blackbox THC",
+                  "v2.0.5 • Blackbox THC",
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 11,
@@ -445,40 +455,10 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  "CLONED APPS (${_instances.length})",
-                  style: const TextStyle(
-                    color: Colors.grey,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.2,
-                    fontSize: 13,
-                  ),
-                ),
-                ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: const Color(0xFF00E5FF).withValues(alpha: 0.15),
-                    foregroundColor: const Color(0xFF00E5FF),
-                    side: const BorderSide(color: Color(0xFF00E5FF), width: 1),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  ),
-                  icon: const Icon(Icons.add, size: 16),
-                  label: const Text(
-                    "CLONE APP",
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
-                  ),
-                  onPressed: _showCloneModal,
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
             if (_instances.isEmpty)
               Center(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 60),
+                  padding: const EdgeInsets.symmetric(vertical: 80),
                   child: Column(
                     children: [
                       Icon(Icons.layers_clear_outlined, color: Colors.grey[600], size: 64),
@@ -489,24 +469,9 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
                       ),
                       const SizedBox(height: 8),
                       Text(
-                        "Tap '+ CLONE APP' to isolate and run an app or game.",
+                        "Tap '+ CLONE APP' below to isolate and run an app or game.",
                         textAlign: TextAlign.center,
                         style: TextStyle(color: Colors.grey[400], fontSize: 13),
-                      ),
-                      const SizedBox(height: 20),
-                      ElevatedButton.icon(
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: const Color(0xFF00E5FF),
-                          foregroundColor: Colors.black,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                        ),
-                        icon: const Icon(Icons.add, fontWeight: FontWeight.w900),
-                        label: const Text(
-                          "CLONE FIRST APP",
-                          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 0.8),
-                        ),
-                        onPressed: _showCloneModal,
                       ),
                     ],
                   ),
@@ -745,8 +710,11 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
                 ),
                 child: Center(
                   child: Text(
-                    isWorkProfileActive ? "Loading core services..." : "Activate Work Profile to view system utilities",
-                    style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                    isWorkProfileActive
+                        ? "Google Play Services & Core Framework Active"
+                        : "Work Profile is not active. Tap 'SETUP WORK PROFILE' above to initialize Dual Space.",
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.grey[400], fontSize: 13),
                   ),
                 ),
               )
@@ -799,7 +767,7 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
         color: Colors.redAccent,
       );
       final ok = await _service.removeWorkProfile();
-      await Future.delayed(const Duration(seconds: 1));
+      await Future.delayed(const Duration(milliseconds: 1500));
       await _loadData();
       if (ok) {
         _showHudNotification(
@@ -816,6 +784,8 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
     final name = app['appName'] as String? ?? 'Core App';
     final pkg = app['packageName'] as String? ?? '';
     final isPlayStore = app['isPlayStore'] == true;
+    final componentName = app['componentName'] as String? ?? '';
+    final canOpen = componentName.isNotEmpty || isPlayStore || pkg == 'com.google.android.play.games';
 
     return Container(
       margin: const EdgeInsets.only(bottom: 10),
@@ -872,19 +842,33 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
               ],
             ),
           ),
-          ElevatedButton(
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF1E2235),
-              foregroundColor: const Color(0xFF00E5FF),
-              side: const BorderSide(color: Color(0xFF00E5FF), width: 1),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          if (canOpen)
+            ElevatedButton(
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF1E2235),
+                foregroundColor: const Color(0xFF00E5FF),
+                side: const BorderSide(color: Color(0xFF00E5FF), width: 1),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              ),
+              onPressed: () {
+                _service.launchApp("core", pkg);
+              },
+              child: const Text("OPEN", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+            )
+          else
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00FF88).withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: const Color(0xFF00FF88).withValues(alpha: 0.5)),
+              ),
+              child: const Text(
+                "ACTIVE",
+                style: TextStyle(color: Color(0xFF00FF88), fontWeight: FontWeight.bold, fontSize: 11),
+              ),
             ),
-            onPressed: () {
-              _service.launchApp("core", pkg);
-            },
-            child: const Text("OPEN", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
-          ),
         ],
       ),
     );
@@ -1110,6 +1094,15 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
                 style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0, fontSize: 14),
               ),
               onPressed: () async {
+                if (inst.isPrimary && _servicesStatus['workProfileActive'] != true) {
+                  _promptSetupWorkProfile(inst);
+                  return;
+                }
+                _showHudNotification(
+                  "Launching ${inst.appName} in Dual Space...",
+                  icon: Icons.rocket_launch,
+                  color: const Color(0xFF00E5FF),
+                );
                 final success = await _service.launchApp(inst.instanceId, inst.packageName);
                 if (!success && mounted) {
                   _showHudNotification(
@@ -1124,6 +1117,52 @@ class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProv
         ],
       ),
     );
+  }
+
+  void _promptSetupWorkProfile(ClonedInstance inst) async {
+    final setup = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF161926),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.security, color: Color(0xFFFF6D00)),
+            SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                "Activate Dual Space?",
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 17),
+              ),
+            ),
+          ],
+        ),
+        content: Text(
+          "To run '${inst.appName}' with an isolated Google Play account and separate app data, Dual Space Work Profile must be active.\n\nSet up Work Profile now?",
+          style: const TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("LATER", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF6D00),
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+            icon: const Icon(Icons.add_moderator, size: 18),
+            label: const Text("SETUP WORK PROFILE", style: TextStyle(fontWeight: FontWeight.bold)),
+            onPressed: () => Navigator.pop(context, true),
+          ),
+        ],
+      ),
+    );
+
+    if (setup == true) {
+      await _service.provisionWorkProfile();
+    }
   }
 
   Widget _buildBadgedIcon(String iconBase64, String badgeColorHex) {

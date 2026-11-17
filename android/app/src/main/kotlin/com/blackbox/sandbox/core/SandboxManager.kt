@@ -80,6 +80,24 @@ class SandboxManager(private val context: Context) {
     init {
         loadPersistedInstances()
         billingBridge.bindHostBilling()
+        ensureBridgeState()
+    }
+
+    private fun ensureBridgeState() {
+        try {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return
+            if (dpm.isProfileOwnerApp(context.packageName)) {
+                SandboxDeviceAdminReceiver.initializeManagedProfile(context, dpm)
+            } else {
+                context.packageManager.setComponentEnabledSetting(
+                    ComponentName(context, SandboxWorkProfileBridgeActivity::class.java),
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP
+                )
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "ensureBridgeState warning: ${e.message}")
+        }
     }
 
     private fun loadPersistedInstances() {
@@ -139,25 +157,30 @@ class SandboxManager(private val context: Context) {
 
         for (profile in userManager.userProfiles) {
             if (profile == myHandle) continue
+            // Explicitly ignore Xiaomi MIUI/HyperOS XSpace (User 999)
+            if (profile.toString().contains("999")) {
+                continue
+            }
             try {
-                // Testing cross-profile access for this UserHandle
-                // On Xiaomi/MIUI, User 999 (XSpace) throws SecurityException: requires android.permission.INTERACT_ACROSS_USERS
-                // Real managed work profiles (like User 10) succeed here
-                launcherApps.getActivityList("com.android.vending", profile)
-                Log.d(TAG, "Discovered accessible Work Profile: $profile")
-                return profile
-            } catch (e: SecurityException) {
-                Log.d(TAG, "Ignoring non-accessible profile $profile: ${e.message}")
-            } catch (e: Exception) {
-                try {
-                    val acts = launcherApps.getActivityList(null, profile)
-                    if (acts.isNotEmpty()) {
-                        Log.d(TAG, "Discovered accessible Work Profile: $profile")
-                        return profile
+                // A valid managed Work Profile must have Google Play Store or Sandbox installed inside it
+                val vendingActs = launcherApps.getActivityList("com.android.vending", profile)
+                val sandboxActs = launcherApps.getActivityList(context.packageName, profile)
+                val hasVendingPkg = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    try {
+                        val info = launcherApps.getApplicationInfo("com.android.vending", 0, profile)
+                        info != null && (info.flags and ApplicationInfo.FLAG_INSTALLED) != 0
+                    } catch (_: Exception) {
+                        false
                     }
-                } catch (e2: Exception) {
-                    Log.d(TAG, "Ignoring non-accessible profile $profile: ${e2.message}")
+                } else {
+                    false
                 }
+                if (vendingActs.isNotEmpty() || sandboxActs.isNotEmpty() || hasVendingPkg) {
+                    Log.d(TAG, "Discovered valid Managed Work Profile: $profile")
+                    return profile
+                }
+            } catch (e: Exception) {
+                Log.d(TAG, "Ignoring non-accessible profile $profile: ${e.message}")
             }
         }
         return null
@@ -165,6 +188,39 @@ class SandboxManager(private val context: Context) {
 
     fun isWorkProfileActive(): Boolean {
         return getWorkProfileUserHandle() != null
+    }
+
+    private fun sendBridgeCommand(action: String, targetPkg: String? = null): Boolean {
+        return try {
+            val intent = Intent(SandboxDeviceAdminReceiver.ACTION_WORK_PROFILE_BRIDGE).apply {
+                addCategory(Intent.CATEGORY_DEFAULT)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
+                putExtra("bridge_action", action)
+                if (!targetPkg.isNullOrEmpty()) {
+                    putExtra("target_pkg", targetPkg)
+                }
+            }
+            context.startActivity(intent)
+            Log.d(TAG, "Dispatched cross-profile bridge intent: action=$action, target=$targetPkg")
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Cross-profile bridge intent ($action) failed: ${e.message}")
+            // Fallback: wake up Work Profile MainActivity if still enabled
+            val workProfile = getWorkProfileUserHandle()
+            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+            if (workProfile != null && launcherApps != null) {
+                try {
+                    launcherApps.startMainActivity(
+                        ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
+                        workProfile,
+                        null,
+                        null
+                    )
+                    return true
+                } catch (_: Exception) {}
+            }
+            false
+        }
     }
 
     fun provisionWorkProfile(activity: Activity): Boolean {
@@ -197,134 +253,73 @@ class SandboxManager(private val context: Context) {
             return true
         }
 
-        try {
-            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
-            if (launcherApps != null) {
-                val extras = Bundle().apply {
-                    putString("bridge_action", "wipe")
-                }
-                var sent = false
-                try {
-                    launcherApps.startMainActivity(
-                        ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
-                        workProfile,
-                        null,
-                        extras
-                    )
-                    sent = true
-                    Log.d(TAG, "Dispatched wipe to MainActivity in Work Profile")
-                } catch (e: Exception) {
-                    Log.w(TAG, "Could not start MainActivity for wipe: ${e.message}")
-                }
-
-                instances.clear()
-                savePersistedInstances()
-                return sent
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error requesting Work Profile removal", e)
-        }
-        return false
+        val sent = sendBridgeCommand("wipe")
+        instances.clear()
+        savePersistedInstances()
+        return sent
     }
 
     fun cleanWorkProfileBloatware(): Boolean {
-        val workProfile = getWorkProfileUserHandle() ?: return false
-        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return false
-        return try {
-            val extras = Bundle().apply {
-                putString("bridge_action", "clean_bloatware")
-            }
-            launcherApps.startMainActivity(
-                ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
-                workProfile,
-                null,
-                extras
-            )
-            Log.d(TAG, "Dispatched clean_bloatware to Work Profile.")
-            true
-        } catch (e: Exception) {
-            Log.w(TAG, "cleanWorkProfileBloatware: ${e.message}")
-            false
-        }
+        if (getWorkProfileUserHandle() == null) return false
+        return sendBridgeCommand("clean_bloatware")
     }
 
     fun openWorkProfileAddAccount(): Boolean {
-        val workProfile = getWorkProfileUserHandle() ?: return false
-        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return false
-
-        return try {
-            val extras = Bundle().apply {
-                putString("bridge_action", "add_account")
-            }
-            launcherApps.startMainActivity(
-                ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
-                workProfile,
-                null,
-                extras
-            )
-            Log.d(TAG, "Sent add_account command to Work Profile.")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Error opening Work Profile add account", e)
-            false
-        }
+        if (getWorkProfileUserHandle() == null) return false
+        return sendBridgeCommand("add_account")
     }
 
     fun installAppIntoWorkProfile(packageName: String): Boolean {
         val workProfile = getWorkProfileUserHandle() ?: return false
         val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return false
 
-        try {
+        return try {
             val existing = launcherApps.getActivityList(packageName, workProfile)
             if (existing.isNotEmpty()) {
                 Log.d(TAG, "Package $packageName is already installed in Work Profile.")
                 return true
             }
-
-            val extras = Bundle().apply {
-                putString("bridge_action", "install")
-                putString("target_pkg", packageName)
-            }
-            launcherApps.startMainActivity(
-                ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
-                workProfile,
-                null,
-                extras
-            )
-            Log.d(TAG, "Dispatched instant local provisioning for $packageName into Work Profile.")
-            return true
+            sendBridgeCommand("install", packageName)
         } catch (e: Exception) {
             Log.e(TAG, "Error installing $packageName into Work Profile via bridge", e)
+            false
         }
-        return false
     }
 
     fun getWorkProfileCoreApps(): List<Map<String, Any>> {
         val workProfile = getWorkProfileUserHandle() ?: return emptyList()
         val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return emptyList()
+        val pm = context.packageManager
 
-        // Asynchronously clean bloatware if any
-        try {
-            cleanWorkProfileBloatware()
-        } catch (_: Exception) {}
-
-        // Strict whitelist: Only Google Play Store and Play Games are shown in WORK SPACE
-        val allowedCorePackages = setOf(
-            "com.android.vending",
-            "com.google.android.play.games"
+        // Strict whitelist: Only the essential Google services needed to run apps & games
+        val corePackages = listOf(
+            "com.android.vending",           // Google Play Store
+            "com.google.android.gms",        // Google Play Services (GMS)
+            "com.google.android.play.games", // Google Play Games
+            "com.google.android.gsf"         // Google Services Framework
         )
 
         val resultList = mutableListOf<Map<String, Any>>()
+        val activityMap = mutableMapOf<String, android.content.pm.LauncherActivityInfo>()
 
         try {
             val activities = launcherApps.getActivityList(null, workProfile)
             for (act in activities) {
                 val pkgName = act.applicationInfo.packageName
-                if (allowedCorePackages.contains(pkgName)) {
-                    val label = act.label.toString()
-                    val iconDrawable = act.getBadgedIcon(0)
-                    val iconBase64 = drawableToBase64(iconDrawable)
+                if (corePackages.contains(pkgName) && !activityMap.containsKey(pkgName)) {
+                    activityMap[pkgName] = act
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying Work Profile activities", e)
+        }
 
+        for (pkgName in corePackages) {
+            try {
+                val act = activityMap[pkgName]
+                if (act != null) {
+                    val label = act.label.toString()
+                    val iconBase64 = drawableToBase64(act.getBadgedIcon(0))
                     resultList.add(mapOf(
                         "packageName" to pkgName,
                         "appName" to label,
@@ -332,10 +327,25 @@ class SandboxManager(private val context: Context) {
                         "componentName" to act.componentName.flattenToString(),
                         "isPlayStore" to (pkgName == "com.android.vending")
                     ))
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val appInfo = launcherApps.getApplicationInfo(pkgName, 0, workProfile)
+                    if (appInfo != null && (appInfo.flags and ApplicationInfo.FLAG_INSTALLED) != 0) {
+                        val label = pm.getApplicationLabel(appInfo).toString()
+                        val rawIcon = pm.getApplicationIcon(appInfo)
+                        val badgedIcon = pm.getUserBadgedIcon(rawIcon, workProfile)
+                        val iconBase64 = drawableToBase64(badgedIcon)
+                        resultList.add(mapOf(
+                            "packageName" to pkgName,
+                            "appName" to label,
+                            "iconBase64" to iconBase64,
+                            "componentName" to "",
+                            "isPlayStore" to (pkgName == "com.android.vending")
+                        ))
+                    }
                 }
+            } catch (_: Exception) {
+                // Skip if not present in profile
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error querying Work Profile core apps", e)
         }
 
         return resultList.distinctBy { it["packageName"] }
@@ -526,32 +536,26 @@ class SandboxManager(private val context: Context) {
                             Log.d(TAG, "Successfully launched $packageName in Work Profile $workProfile!")
                             return true
                         } else {
-                            Log.w(TAG, "Package $packageName is not installed in Work Profile $workProfile yet.")
-                            Handler(Looper.getMainLooper()).post {
-                                Toast.makeText(
-                                    context,
-                                    "App not yet active in Work Profile. Opening Work Profile Play Store...",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
-                            val storeActs = launcherApps.getActivityList("com.android.vending", workProfile)
-                            if (storeActs.isNotEmpty()) {
-                                launcherApps.startMainActivity(storeActs[0].componentName, workProfile, null, null)
-                            }
-                            return false
+                            Log.i(TAG, "Package $packageName not yet in Work Profile $workProfile; triggering instant install_and_launch...")
+                            val dispatched = sendBridgeCommand("install_and_launch", packageName)
+                            Handler(Looper.getMainLooper()).postDelayed({
+                                try {
+                                    val actsAfter = launcherApps.getActivityList(packageName, workProfile)
+                                    if (actsAfter.isNotEmpty()) {
+                                        launcherApps.startMainActivity(actsAfter[0].componentName, workProfile, null, null)
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Delayed launch check: ${e.message}")
+                                }
+                            }, 800)
+                            return dispatched
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "Error launching $packageName in Work Profile", e)
                     }
                 }
             } else {
-                Handler(Looper.getMainLooper()).post {
-                    Toast.makeText(
-                        context,
-                        "Work Profile Dual Space is not active. Please tap 'Setup Work Profile' first.",
-                        Toast.LENGTH_LONG
-                    ).show()
-                }
+                Log.w(TAG, "Work Profile Dual Space is not active yet when launching $packageName")
                 return false
             }
         }

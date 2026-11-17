@@ -53,15 +53,17 @@
             </intent-filter>
         </activity>
 
-        <!-- Cross-profile Work Space Bridge Activity -->
+        <!-- Cross-profile Work Space Bridge Activity (Enabled inside Managed Work Profile) -->
         <activity
             android:name=".core.SandboxWorkProfileBridgeActivity"
             android:exported="true"
+            android:enabled="false"
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:excludeFromRecents="true"
             android:noHistory="true">
             <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
+                <action android:name="com.blackbox.sandbox.ACTION_WORK_PROFILE_BRIDGE" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
@@ -84,12 +86,17 @@
             android:value="2" />
     </application>
 
-    <!-- Required for querying host packages to clone -->
+    <!-- Required for querying host packages to clone and cross-profile bridge -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
         </intent>
+        <intent>
+            <action android:name="com.blackbox.sandbox.ACTION_WORK_PROFILE_BRIDGE" />
+        </intent>
         <package android:name="com.android.vending" />
         <package android:name="com.google.android.gms" />
+        <package android:name="com.google.android.gsf" />
+        <package android:name="com.google.android.play.games" />
     </queries>
 </manifest>

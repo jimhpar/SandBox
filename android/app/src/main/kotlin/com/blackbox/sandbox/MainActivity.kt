@@ -16,6 +16,7 @@ class MainActivity : FlutterActivity() {
         super.onCreate(savedInstanceState)
         sandboxManager = SandboxManager.getInstance(applicationContext)
 
+        val dpm = getSystemService(android.content.Context.DEVICE_POLICY_SERVICE) as? android.app.admin.DevicePolicyManager
         val bridgeAction = intent?.getStringExtra("bridge_action")
         if (!bridgeAction.isNullOrEmpty()) {
             handleBridgeAction(bridgeAction, intent.getStringExtra("target_pkg"))
@@ -23,6 +24,19 @@ class MainActivity : FlutterActivity() {
             return
         }
 
+        // If MainActivity was woken up inside the Managed Work Profile, initialize policies & close
+        if (dpm != null && dpm.isProfileOwnerApp(packageName)) {
+            com.blackbox.sandbox.core.SandboxDeviceAdminReceiver.initializeManagedProfile(this, dpm)
+            finish()
+            return
+        }
+
+        handleShortcutIntent()
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
         handleShortcutIntent()
     }
 
