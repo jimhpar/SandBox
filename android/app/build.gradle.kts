@@ -51,3 +51,7 @@ kotlin {
 flutter {
     source = "../.."
 }
+
+dependencies {
+    implementation("com.android.tools.build:apksig:8.5.2")
+}

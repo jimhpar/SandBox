@@ -71,6 +71,20 @@
             </intent-filter>
         </activity>
 
+        <!-- Dedicated zero-extras Work Profile Wipe Activity (Enabled only inside Managed Work Profile) -->
+        <activity
+            android:name=".core.BridgeWipeActivity"
+            android:exported="true"
+            android:enabled="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
         <!-- Work Profile Device Admin Receiver for Dual Space Isolation -->
         <receiver
             android:name=".core.SandboxDeviceAdminReceiver"
@@ -82,6 +96,7 @@
             <intent-filter>
                 <action android:name="android.app.action.DEVICE_ADMIN_ENABLED" />
                 <action android:name="android.app.action.PROFILE_PROVISIONING_COMPLETE" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
             </intent-filter>
         </receiver>
 

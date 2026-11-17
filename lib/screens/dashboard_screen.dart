@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import '../models/cloned_instance.dart';
@@ -23,11 +24,13 @@ class _DashboardScreenState extends State<DashboardScreen>
   // Sticky Bottom Operation Progress State
   bool _isOperationVisible = false;
   bool _isOperationComplete = false;
+  bool _showOpenSettingsFallback = false;
   String _operationTitle = "";
   String _operationSubtitle = "";
   double _operationProgress = 0.0;
   Color _operationColor = const Color(0xFF00E5FF);
   IconData _operationIcon = Icons.sync;
+  StreamSubscription<Map<String, dynamic>>? _cloneProgressSub;
 
   @override
   void initState() {
@@ -37,11 +40,41 @@ class _DashboardScreenState extends State<DashboardScreen>
     _tabController.addListener(() {
       if (mounted) setState(() {});
     });
+    _cloneProgressSub = _service.cloneProgressStream.listen((event) {
+      if (!mounted) return;
+      final progress = (event['progress'] as num?)?.toDouble() ?? 0.0;
+      final msg = event['message'] as String? ?? '';
+      final done = event['done'] as bool? ?? false;
+      final success = event['success'] as bool? ?? true;
+
+      setState(() {
+        _isOperationVisible = true;
+        _operationProgress = progress;
+        _operationSubtitle = msg;
+        _isOperationComplete = done;
+        if (done) {
+          if (success) {
+            _operationTitle = "App Cloned Successfully!";
+            _operationColor = const Color(0xFF00FF88);
+            _operationIcon = Icons.check_circle;
+          } else {
+            _operationTitle = "Cloning Failed";
+            _operationColor = Colors.redAccent;
+            _operationIcon = Icons.error_outline;
+          }
+        }
+      });
+
+      if (done) {
+        _loadData();
+      }
+    });
     _loadData();
   }
 
   @override
   void dispose() {
+    _cloneProgressSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _tabController.dispose();
     super.dispose();
@@ -177,7 +210,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                               final app = availableApps[index];
                               final pkgName = app['packageName'] as String? ?? '';
                               final iconBase64 = app['iconBase64'] as String? ?? '';
-                              final alreadyCloned = _instances.any((inst) => inst.packageName == pkgName);
+                              final cloneCount = _instances.where((inst) => inst.packageName == pkgName).length;
 
                               return ListTile(
                                 contentPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -198,34 +231,24 @@ class _DashboardScreenState extends State<DashboardScreen>
                                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15),
                                 ),
                                 subtitle: Text(
-                                  pkgName,
+                                  cloneCount > 0 ? "$pkgName ($cloneCount cloned)" : pkgName,
                                   style: TextStyle(color: Colors.grey[500], fontSize: 12),
                                 ),
-                                trailing: alreadyCloned
-                                    ? Container(
-                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                                        decoration: BoxDecoration(
-                                          color: const Color(0xFF00FF88).withValues(alpha: 0.15),
-                                          borderRadius: BorderRadius.circular(10),
-                                          border: Border.all(color: const Color(0xFF00FF88).withValues(alpha: 0.5)),
-                                        ),
-                                        child: const Text(
-                                          "CLONED",
-                                          style: TextStyle(color: Color(0xFF00FF88), fontWeight: FontWeight.bold, fontSize: 11),
-                                        ),
-                                      )
-                                    : ElevatedButton(
-                                        style: ElevatedButton.styleFrom(
-                                          backgroundColor: const Color(0xFF00E5FF),
-                                          foregroundColor: Colors.black,
-                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                        ),
-                                        onPressed: () {
-                                          Navigator.pop(context);
-                                          _cloneWithProgress(app);
-                                        },
-                                        child: const Text("Clone", style: TextStyle(fontWeight: FontWeight.bold)),
-                                      ),
+                                trailing: ElevatedButton(
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: const Color(0xFF00E5FF),
+                                    foregroundColor: Colors.black,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  ),
+                                  onPressed: () {
+                                    Navigator.pop(context);
+                                    _cloneWithProgress(app);
+                                  },
+                                  child: Text(
+                                    cloneCount > 0 ? "Clone #${cloneCount + 1}" : "Clone",
+                                    style: const TextStyle(fontWeight: FontWeight.bold),
+                                  ),
+                                ),
                               );
                             },
                           ),
@@ -370,7 +393,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                 ),
                 Text(
-                  "v2.0.6 • Blackbox THC",
+                  "v2.1.0 • Blackbox THC",
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 11,
@@ -520,26 +543,46 @@ class _DashboardScreenState extends State<DashboardScreen>
             ),
             if (_isOperationComplete) ...[
               const SizedBox(height: 12),
-              SizedBox(
-                width: double.infinity,
-                child: ElevatedButton.icon(
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: _operationColor,
-                    foregroundColor: Colors.black,
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                    padding: const EdgeInsets.symmetric(vertical: 10),
+              Row(
+                children: [
+                  if (_showOpenSettingsFallback) ...[
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.amberAccent,
+                          side: const BorderSide(color: Colors.amberAccent),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                        icon: const Icon(Icons.settings, size: 17),
+                        label: const Text("SETTINGS", style: TextStyle(fontWeight: FontWeight.bold)),
+                        onPressed: () => _service.openWorkProfileSettings(),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                  ],
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: _operationColor,
+                        foregroundColor: Colors.black,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 10),
+                      ),
+                      icon: const Icon(Icons.check, size: 18),
+                      label: const Text(
+                        "DONE",
+                        style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0),
+                      ),
+                      onPressed: () {
+                        setState(() {
+                          _isOperationVisible = false;
+                          _showOpenSettingsFallback = false;
+                        });
+                      },
+                    ),
                   ),
-                  icon: const Icon(Icons.check, size: 18),
-                  label: const Text(
-                    "DONE",
-                    style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0),
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _isOperationVisible = false;
-                    });
-                  },
-                ),
+                ],
               ),
             ],
           ],
@@ -556,45 +599,19 @@ class _DashboardScreenState extends State<DashboardScreen>
     setState(() {
       _isOperationVisible = true;
       _isOperationComplete = false;
+      _showOpenSettingsFallback = false;
       _operationTitle = "Cloning $appName";
-      _operationSubtitle = "Preparing isolated container...";
-      _operationProgress = 0.15;
+      _operationSubtitle = "Reading APK from device storage (Offline)...";
+      _operationProgress = 0.05;
       _operationColor = const Color(0xFF00E5FF);
       _operationIcon = Icons.copy_all;
     });
 
-    await Future.delayed(const Duration(milliseconds: 250));
-    if (!mounted) return;
-    setState(() {
-      _operationSubtitle = "Copying APK from device storage (Offline)...";
-      _operationProgress = 0.45;
-    });
-
-    final newClone = await _service.cloneApp(pkgName);
-    if (!mounted) return;
-
-    setState(() {
-      _operationSubtitle = "Activating $appName in Dual Space Work Profile...";
-      _operationProgress = 0.78;
-    });
-
-    await Future.delayed(const Duration(milliseconds: 700));
-    await _loadData();
-    if (!mounted) return;
-
-    if (newClone != null) {
-      setState(() {
-        _operationTitle = "$appName Cloned!";
-        _operationSubtitle = "Copied locally from device storage. Ready to launch.";
-        _operationProgress = 1.0;
-        _operationColor = const Color(0xFF00FF88);
-        _operationIcon = Icons.check_circle;
-        _isOperationComplete = true;
-      });
-    } else {
+    final started = await _service.cloneAppAsync(pkgName);
+    if (!started && mounted) {
       setState(() {
         _operationTitle = "Cloning Failed";
-        _operationSubtitle = "Could not copy $appName into Work Profile.";
+        _operationSubtitle = "Could not start APK cloner for $appName.";
         _operationProgress = 1.0;
         _operationColor = Colors.redAccent;
         _operationIcon = Icons.error_outline;
@@ -923,6 +940,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       setState(() {
         _isOperationVisible = true;
         _isOperationComplete = false;
+        _showOpenSettingsFallback = false;
         _operationTitle = "Removing Dual Space";
         _operationSubtitle = "Wiping Work Profile, accounts & cloned data...";
         _operationProgress = 0.20;
@@ -957,6 +975,7 @@ class _DashboardScreenState extends State<DashboardScreen>
       setState(() {
         _operationProgress = 1.0;
         _isOperationComplete = true;
+        _showOpenSettingsFallback = !removed;
         if (removed) {
           _operationTitle = "Dual Space Removed!";
           _operationSubtitle = "Work Profile and all isolated accounts deleted.";
@@ -964,7 +983,7 @@ class _DashboardScreenState extends State<DashboardScreen>
           _operationIcon = Icons.check_circle;
         } else {
           _operationTitle = "Removal Incomplete";
-          _operationSubtitle = "Could not verify removal. Check Settings > Accounts > Work.";
+          _operationSubtitle = "Could not verify removal. Tap SETTINGS to remove manually.";
           _operationColor = Colors.amberAccent;
           _operationIcon = Icons.warning_amber_rounded;
         }
@@ -1174,7 +1193,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                     ),
                     const SizedBox(height: 3),
                     Text(
-                      inst.packageName,
+                      inst.isStandaloneClone ? inst.clonedPackageName : inst.packageName,
                       style: TextStyle(color: Colors.grey[400], fontSize: 12),
                       overflow: TextOverflow.ellipsis,
                     ),
@@ -1287,12 +1306,12 @@ class _DashboardScreenState extends State<DashboardScreen>
                 style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0, fontSize: 14),
               ),
               onPressed: () async {
-                if (inst.isPrimary && _servicesStatus['workProfileActive'] != true) {
+                if (!inst.isStandaloneClone && inst.isPrimary && _servicesStatus['workProfileActive'] != true) {
                   _promptSetupWorkProfile(inst);
                   return;
                 }
                 _showHudNotification(
-                  "Launching ${inst.appName} in Dual Space...",
+                  "Launching ${inst.appName}...",
                   icon: Icons.rocket_launch,
                   color: const Color(0xFF00E5FF),
                 );

@@ -5,6 +5,7 @@ import androidx.annotation.NonNull
 import com.blackbox.sandbox.core.SandboxManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 
 class MainActivity : FlutterActivity() {
@@ -97,6 +98,18 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         sandboxManager = SandboxManager.getInstance(applicationContext)
 
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "com.blackbox.sandbox/clone_progress")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    sandboxManager.cloneProgressListener = { event ->
+                        events?.success(event)
+                    }
+                }
+                override fun onCancel(arguments: Any?) {
+                    sandboxManager.cloneProgressListener = null
+                }
+            })
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getInstalledApps" -> {
@@ -107,6 +120,16 @@ class MainActivity : FlutterActivity() {
                         result.error("ERROR", e.message, null)
                     }
                 }
+                "cloneAppAsync" -> {
+                    val packageName = call.argument<String>("packageName") ?: ""
+                    val customName = call.argument<String>("customName")
+                    if (packageName.isNotEmpty()) {
+                        val started = sandboxManager.cloneAppAsync(packageName, customName)
+                        result.success(started)
+                    } else {
+                        result.error("INVALID_ARGS", "Package name required", null)
+                    }
+                }
                 "cloneApp" -> {
                     val packageName = call.argument<String>("packageName") ?: ""
                     val customName = call.argument<String>("customName")
@@ -115,6 +138,7 @@ class MainActivity : FlutterActivity() {
                         result.success(mapOf(
                             "instanceId" to inst.instanceId,
                             "packageName" to inst.packageName,
+                            "clonedPackageName" to inst.clonedPackageName,
                             "appName" to inst.appName,
                             "fakeAndroidId" to inst.fakeAndroidId,
                             "fakeDeviceModel" to inst.fakeDeviceModel,
@@ -133,6 +157,7 @@ class MainActivity : FlutterActivity() {
                         mapOf(
                             "instanceId" to it.instanceId,
                             "packageName" to it.packageName,
+                            "clonedPackageName" to it.clonedPackageName,
                             "appName" to it.appName,
                             "fakeAndroidId" to it.fakeAndroidId,
                             "fakeDeviceModel" to it.fakeDeviceModel,
@@ -190,6 +215,14 @@ class MainActivity : FlutterActivity() {
                 "removeWorkProfile" -> {
                     val ok = sandboxManager.removeWorkProfile()
                     result.success(ok)
+                }
+                "openWorkProfileSettings" -> {
+                    try {
+                        startActivity(android.content.Intent(android.provider.Settings.ACTION_SYNC_SETTINGS).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
+                        result.success(true)
+                    } catch (e: Exception) {
+                        result.success(false)
+                    }
                 }
                 "openWorkProfileAddAccount" -> {
                     val ok = sandboxManager.openWorkProfileAddAccount()

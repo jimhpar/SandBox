@@ -5,6 +5,10 @@ import '../models/cloned_instance.dart';
 
 class SandboxService {
   static const MethodChannel _androidChannel = MethodChannel('com.blackbox.sandbox/engine');
+  static const EventChannel _cloneProgressChannel = EventChannel('com.blackbox.sandbox/clone_progress');
+
+  Stream<Map<String, dynamic>> get cloneProgressStream =>
+      _cloneProgressChannel.receiveBroadcastStream().map((e) => Map<String, dynamic>.from(e as Map));
 
   // Real instance state (starts empty - no pre-existing fake instances!)
   final List<ClonedInstance> _inMemoryInstances = [];
@@ -47,6 +51,21 @@ class SandboxService {
       debugPrint('Error fetching installed apps: $e');
     }
     return [];
+  }
+
+  Future<bool> cloneAppAsync(String packageName, {String? customName}) async {
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        final bool? res = await _androidChannel.invokeMethod('cloneAppAsync', {
+          'packageName': packageName,
+          'customName': customName,
+        });
+        return res ?? false;
+      }
+    } catch (e) {
+      debugPrint('Error starting async clone: $e');
+    }
+    return false;
   }
 
   Future<ClonedInstance?> cloneApp(String packageName, {String? customName}) async {
@@ -173,6 +192,18 @@ class SandboxService {
       }
     } catch (e) {
       debugPrint('Error removing work profile: $e');
+    }
+    return false;
+  }
+
+  Future<bool> openWorkProfileSettings() async {
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        final bool? res = await _androidChannel.invokeMethod('openWorkProfileSettings');
+        return res ?? false;
+      }
+    } catch (e) {
+      debugPrint('Error opening work profile settings: $e');
     }
     return false;
   }

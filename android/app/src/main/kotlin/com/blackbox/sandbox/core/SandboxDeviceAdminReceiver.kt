@@ -20,6 +20,17 @@ class SandboxDeviceAdminReceiver : DeviceAdminReceiver() {
 
     private val TAG = "SandboxDeviceAdmin"
 
+    override fun onReceive(context: Context, intent: Intent) {
+        super.onReceive(context, intent)
+        if (intent.action == Intent.ACTION_MY_PACKAGE_REPLACED) {
+            val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return
+            if (dpm.isProfileOwnerApp(context.packageName)) {
+                Log.d(TAG, "Package replaced inside Managed Profile: re-initializing bridge components...")
+                initializeManagedProfile(context, dpm)
+            }
+        }
+    }
+
     override fun onEnabled(context: Context, intent: Intent) {
         super.onEnabled(context, intent)
         val dpm = context.getSystemService(Context.DEVICE_POLICY_SERVICE) as? DevicePolicyManager ?: return
@@ -70,10 +81,15 @@ class SandboxDeviceAdminReceiver : DeviceAdminReceiver() {
                     } catch (_: Exception) {}
                 }
 
-                // 3. Enable SandboxWorkProfileBridgeActivity inside Work Profile
+                // 3. Enable SandboxWorkProfileBridgeActivity & BridgeWipeActivity inside Work Profile
                 val pm = context.packageManager
                 pm.setComponentEnabledSetting(
                     ComponentName(context, SandboxWorkProfileBridgeActivity::class.java),
+                    PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                    PackageManager.DONT_KILL_APP
+                )
+                pm.setComponentEnabledSetting(
+                    ComponentName(context, BridgeWipeActivity::class.java),
                     PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
                     PackageManager.DONT_KILL_APP
                 )

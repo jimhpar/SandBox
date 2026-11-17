@@ -48,14 +48,15 @@ data class ClonedInstance(
     val storageUsageBytes: Long = 0L,
     val iconBase64: String = "",
     val isPrimary: Boolean = true,
-    val badgeColor: String = "#FF6D00"
+    val badgeColor: String = "#FF6D00",
+    val clonedPackageName: String = packageName
 )
 
 /**
- * SandboxManager (Hybrid Dual Space Engine)
- * - Work Profile (Island / Shelter Model): Primary Clone (Clone 1) runs in official Work Profile with native GMS & Google Play Store.
- * - Dynamic Container: Multi-Clones (Clone 2, 3...) run with isolated VFS and Pink "SB" badge.
- * Developed for Blackbox THC Sandbox v2.0.2.
+ * SandboxManager (Hybrid Offline APK Cloner + Work Profile Engine)
+ * - Standalone APK Cloner: Copies device APK offline, renames package (.sb1, .sb2...), signs v2/v3, installs independently.
+ * - Work Profile (Optional): Native GMS & Play Store isolation.
+ * Developed for Blackbox THC Sandbox v2.1.0.
  */
 class SandboxManager(private val context: Context) {
 
@@ -73,14 +74,95 @@ class SandboxManager(private val context: Context) {
     private val TAG = "BlackboxSandbox"
     val vfs = VirtualFileSystem(context)
     val billingBridge = BillingBridgeManager(context)
+    private val apkCloner = ApkClonerEngine(context)
+    private val cloneExecutor = java.util.concurrent.Executors.newSingleThreadExecutor()
     private val instancesFile = File(context.filesDir, "sandbox_instances.json")
 
     private val instances = mutableMapOf<String, ClonedInstance>()
+
+    @Volatile
+    var cloneProgressListener: ((Map<String, Any>) -> Unit)? = null
+
+    private var pendingCloneMeta: ClonedInstance? = null
+
+    private val installStatusReceiver = object : android.content.BroadcastReceiver() {
+        override fun onReceive(ctx: Context, intent: Intent) {
+            if (intent.action != ApkClonerEngine.ACTION_INSTALL_STATUS) return
+            val status = intent.getIntExtra(android.content.pm.PackageInstaller.EXTRA_STATUS, -1)
+            val msg = intent.getStringExtra(android.content.pm.PackageInstaller.EXTRA_STATUS_MESSAGE) ?: ""
+            val clonedPkg = intent.getStringExtra("cloned_pkg") ?: ""
+            Log.d(TAG, "PackageInstaller status=$status for $clonedPkg msg=$msg")
+
+            when (status) {
+                android.content.pm.PackageInstaller.STATUS_PENDING_USER_ACTION -> {
+                    val confirmIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        intent.getParcelableExtra(Intent.EXTRA_INTENT, Intent::class.java)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        intent.getParcelableExtra(Intent.EXTRA_INTENT)
+                    }
+                    if (confirmIntent != null) {
+                        confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        try {
+                            context.startActivity(confirmIntent)
+                            emitCloneProgress(0.90, "Confirm Android install prompt...", false, true)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to start install confirmation", e)
+                            emitCloneProgress(1.0, "Install prompt error: ${e.message}", true, false)
+                        }
+                    }
+                }
+                android.content.pm.PackageInstaller.STATUS_SUCCESS -> {
+                    pendingCloneMeta?.let { meta ->
+                        if (meta.clonedPackageName == clonedPkg || clonedPkg.isEmpty()) {
+                            instances[meta.instanceId] = meta
+                            savePersistedInstances()
+                            createHomeScreenShortcut(meta.instanceId, meta.clonedPackageName, meta.appName, meta.badgeColor)
+                            pendingCloneMeta = null
+                        }
+                    }
+                    emitCloneProgress(1.0, "Cloned app installed & ready!", true, true)
+                }
+                else -> {
+                    pendingCloneMeta = null
+                    val errText = if (msg.isNotEmpty()) msg else "Installation failed (code $status)"
+                    emitCloneProgress(1.0, errText, true, false)
+                }
+            }
+        }
+    }
 
     init {
         loadPersistedInstances()
         billingBridge.bindHostBilling()
         ensureBridgeState()
+        registerInstallReceiver()
+    }
+
+    private fun registerInstallReceiver() {
+        try {
+            val filter = android.content.IntentFilter(ApkClonerEngine.ACTION_INSTALL_STATUS)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.registerReceiver(installStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                context.registerReceiver(installStatusReceiver, filter)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "registerInstallReceiver warning: ${e.message}")
+        }
+    }
+
+    private fun emitCloneProgress(progress: Double, message: String, done: Boolean, success: Boolean) {
+        Handler(Looper.getMainLooper()).post {
+            cloneProgressListener?.invoke(
+                mapOf(
+                    "progress" to progress,
+                    "message" to message,
+                    "done" to done,
+                    "success" to success
+                )
+            )
+        }
     }
 
     private fun ensureBridgeState() {
@@ -91,6 +173,11 @@ class SandboxManager(private val context: Context) {
             } else {
                 context.packageManager.setComponentEnabledSetting(
                     ComponentName(context, SandboxWorkProfileBridgeActivity::class.java),
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                    PackageManager.DONT_KILL_APP
+                )
+                context.packageManager.setComponentEnabledSetting(
+                    ComponentName(context, BridgeWipeActivity::class.java),
                     PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
                     PackageManager.DONT_KILL_APP
                 )
@@ -107,9 +194,10 @@ class SandboxManager(private val context: Context) {
             val array = JSONArray(jsonString)
             for (i in 0 until array.length()) {
                 val obj = array.getJSONObject(i)
+                val pkg = obj.getString("packageName")
                 val inst = ClonedInstance(
                     instanceId = obj.getString("instanceId"),
-                    packageName = obj.getString("packageName"),
+                    packageName = pkg,
                     appName = obj.getString("appName"),
                     fakeAndroidId = obj.getString("fakeAndroidId"),
                     fakeDeviceModel = obj.getString("fakeDeviceModel"),
@@ -117,7 +205,8 @@ class SandboxManager(private val context: Context) {
                     storageUsageBytes = obj.optLong("storageUsageBytes", 0L),
                     iconBase64 = obj.optString("iconBase64", ""),
                     isPrimary = obj.optBoolean("isPrimary", true),
-                    badgeColor = obj.optString("badgeColor", "#FF6D00")
+                    badgeColor = obj.optString("badgeColor", "#FF6D00"),
+                    clonedPackageName = obj.optString("clonedPackageName", pkg)
                 )
                 instances[inst.instanceId] = inst
             }
@@ -133,6 +222,7 @@ class SandboxManager(private val context: Context) {
                 val obj = JSONObject().apply {
                     put("instanceId", inst.instanceId)
                     put("packageName", inst.packageName)
+                    put("clonedPackageName", inst.clonedPackageName)
                     put("appName", inst.appName)
                     put("fakeAndroidId", inst.fakeAndroidId)
                     put("fakeDeviceModel", inst.fakeDeviceModel)
@@ -269,13 +359,30 @@ class SandboxManager(private val context: Context) {
         val workProfile = getWorkProfileUserHandle()
         if (workProfile == null) {
             Log.d(TAG, "No active Work Profile to remove.")
-            instances.clear()
-            savePersistedInstances()
             return true
         }
 
-        val sent = sendBridgeCommand("wipe")
-        instances.clear()
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+        var sent = false
+        if (launcherApps != null) {
+            // Dedicated zero-extras BridgeWipeActivity (never affected by LauncherApps opts stripping)
+            try {
+                launcherApps.startMainActivity(
+                    ComponentName(context.packageName, "com.blackbox.sandbox.core.BridgeWipeActivity"),
+                    workProfile,
+                    null,
+                    null
+                )
+                sent = true
+                Log.d(TAG, "Dispatched zero-extras BridgeWipeActivity inside $workProfile")
+            } catch (e: Exception) {
+                Log.w(TAG, "BridgeWipeActivity failed: ${e.message}; trying CrossProfileIntentFilter...")
+                sent = sendBridgeCommand("wipe")
+            }
+        }
+
+        // Only clear Work Profile-backed instances; keep standalone APK clones intact
+        instances.entries.removeIf { it.value.clonedPackageName == it.value.packageName }
         savePersistedInstances()
         return sent
     }
@@ -381,6 +488,8 @@ class SandboxManager(private val context: Context) {
             val isSystem = (app.flags and ApplicationInfo.FLAG_SYSTEM) != 0
             if (!isSystem || app.packageName == "com.google.android.youtube" || app.packageName == "com.google.android.apps.photos") {
                 if (app.packageName == context.packageName) continue
+                // Exclude already-cloned .sb1/.sb2 packages from the source app list
+                if (instances.values.any { it.clonedPackageName == app.packageName && it.clonedPackageName != it.packageName }) continue
 
                 val name = pm.getApplicationLabel(app).toString()
                 val iconDrawable = try {
@@ -401,6 +510,74 @@ class SandboxManager(private val context: Context) {
             }
         }
         return appList.sortedBy { (it["appName"] as String).lowercase() }
+    }
+
+    fun cloneAppAsync(packageName: String, customName: String?): Boolean {
+        return try {
+            val pm = context.packageManager
+            val appInfo = pm.getApplicationInfo(packageName, 0)
+            val baseAppName = pm.getApplicationLabel(appInfo).toString()
+
+            var cloneIdx = 1
+            while (true) {
+                val candidate = "$packageName.sb$cloneIdx"
+                val existsInInstances = instances.values.any { it.clonedPackageName == candidate }
+                val existsOnDevice = try {
+                    pm.getPackageInfo(candidate, 0)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+                if (!existsInInstances && !existsOnDevice) break
+                cloneIdx++
+            }
+
+            val clonedPkg = "$packageName.sb$cloneIdx"
+            val isPrimary = (cloneIdx == 1)
+            val badgeColor = if (isPrimary) "#FF6D00" else "#FF2D75"
+            val appName = if (!customName.isNullOrEmpty()) customName else "$baseAppName (SB$cloneIdx)"
+
+            val instanceId = UUID.randomUUID().toString().substring(0, 8)
+            val fakeAndroidId = UUID.randomUUID().toString().replace("-", "").substring(0, 16)
+            val sampleModels = listOf("Samsung Galaxy S24 Ultra", "Google Pixel 9 Pro", "OnePlus 12", "Xiaomi 14 Ultra")
+            val fakeModel = sampleModels.random()
+
+            val iconDrawable = pm.getApplicationIcon(appInfo)
+            val iconBase64 = drawableToBase64(iconDrawable)
+            val apkFile = File(appInfo.sourceDir)
+            val initialSize = if (apkFile.exists()) apkFile.length() else 0L
+
+            val meta = ClonedInstance(
+                instanceId = instanceId,
+                packageName = packageName,
+                appName = appName,
+                fakeAndroidId = fakeAndroidId,
+                fakeDeviceModel = fakeModel,
+                playBillingEnabled = true,
+                storageUsageBytes = initialSize,
+                iconBase64 = iconBase64,
+                isPrimary = isPrimary,
+                badgeColor = badgeColor,
+                clonedPackageName = clonedPkg
+            )
+            pendingCloneMeta = meta
+
+            cloneExecutor.execute {
+                emitCloneProgress(0.05, "Preparing offline clone for $baseAppName...", false, true)
+                val started = apkCloner.cloneAndInstallApk(packageName, clonedPkg, "SB$cloneIdx") { p, msg ->
+                    emitCloneProgress(p, msg, false, true)
+                }
+                if (!started) {
+                    pendingCloneMeta = null
+                    emitCloneProgress(1.0, "Failed to repackage $baseAppName APK.", true, false)
+                }
+            }
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "cloneAppAsync error", e)
+            emitCloneProgress(1.0, "Error: ${e.message}", true, false)
+            false
+        }
     }
 
     fun cloneApp(packageName: String, customName: String?): ClonedInstance {
@@ -540,9 +717,30 @@ class SandboxManager(private val context: Context) {
 
     fun launchApp(instanceId: String, packageName: String): Boolean {
         val inst = instances[instanceId]
+        val clonedPkg = inst?.clonedPackageName ?: packageName
         val isPrimary = inst?.isPrimary ?: true
 
-        Log.d(TAG, "launchApp called for $packageName (instanceId: $instanceId, isPrimary: $isPrimary)")
+        Log.d(TAG, "launchApp called for $packageName (clonedPkg=$clonedPkg, instanceId=$instanceId, isPrimary=$isPrimary)")
+
+        // 0. Standalone Repackaged APK Clone (runs without Work Profile!)
+        if (clonedPkg != packageName) {
+            return try {
+                val pm = context.packageManager
+                val launchIntent = pm.getLaunchIntentForPackage(clonedPkg)
+                if (launchIntent != null) {
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    context.startActivity(launchIntent)
+                    Log.d(TAG, "Launched standalone cloned package: $clonedPkg")
+                    true
+                } else {
+                    Log.w(TAG, "Standalone cloned package $clonedPkg is not installed on device")
+                    false
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error launching standalone cloned package $clonedPkg", e)
+                false
+            }
+        }
 
         // 1. Primary Clone: Work Profile Isolation
         if (isPrimary) {
@@ -609,17 +807,28 @@ class SandboxManager(private val context: Context) {
 
             return try {
                 val pm = context.packageManager
-                val appInfo = pm.getApplicationInfo(packageName, 0)
+                val targetPkg = instances[instanceId]?.clonedPackageName ?: packageName
+                val appInfo = try {
+                    pm.getApplicationInfo(targetPkg, 0)
+                } catch (_: Exception) {
+                    pm.getApplicationInfo(packageName, 0)
+                }
                 val originalDrawable = pm.getApplicationIcon(appInfo)
                 val originalBitmap = drawableToBitmap(originalDrawable)
                 val badgedBitmap = createBadgedBitmap(originalBitmap, badgeColor)
 
-                val launchIntent = Intent(context, SandboxContainerActivity::class.java).apply {
-                    action = Intent.ACTION_VIEW
-                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-                    putExtra("sandbox_pkg", packageName)
-                    putExtra("sandbox_instance_id", instanceId)
-                    putExtra("is_sandbox_clone", true)
+                val launchIntent = if (targetPkg != packageName && pm.getLaunchIntentForPackage(targetPkg) != null) {
+                    pm.getLaunchIntentForPackage(targetPkg)!!.apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
+                    }
+                } else {
+                    Intent(context, SandboxContainerActivity::class.java).apply {
+                        action = Intent.ACTION_VIEW
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                        putExtra("sandbox_pkg", packageName)
+                        putExtra("sandbox_instance_id", instanceId)
+                        putExtra("is_sandbox_clone", true)
+                    }
                 }
 
                 val shortcutId = "sb_${instanceId}_${packageName}"
@@ -707,6 +916,17 @@ class SandboxManager(private val context: Context) {
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error disabling shortcut", e)
+            }
+        }
+
+        if (inst.clonedPackageName != inst.packageName) {
+            try {
+                val uninstallIntent = Intent(Intent.ACTION_DELETE, Uri.parse("package:${inst.clonedPackageName}")).apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                context.startActivity(uninstallIntent)
+            } catch (e: Exception) {
+                Log.w(TAG, "Uninstall intent error for ${inst.clonedPackageName}: ${e.message}")
             }
         }
 

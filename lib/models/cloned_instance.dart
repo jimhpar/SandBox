@@ -9,6 +9,7 @@ class ClonedInstance {
   final String iconBase64;
   final bool isPrimary;
   final String badgeColor;
+  final String clonedPackageName;
 
   ClonedInstance({
     required this.instanceId,
@@ -21,12 +22,16 @@ class ClonedInstance {
     this.iconBase64 = '',
     this.isPrimary = true,
     this.badgeColor = '#FF6D00',
+    this.clonedPackageName = '',
   });
 
+  bool get isStandaloneClone => clonedPackageName.isNotEmpty && clonedPackageName != packageName;
+
   factory ClonedInstance.fromMap(Map<dynamic, dynamic> map) {
+    final pkg = map['packageName'] as String? ?? '';
     return ClonedInstance(
       instanceId: map['instanceId'] as String? ?? '',
-      packageName: map['packageName'] as String? ?? '',
+      packageName: pkg,
       appName: map['appName'] as String? ?? '',
       fakeAndroidId: map['fakeAndroidId'] as String? ?? 'N/A',
       fakeDeviceModel: map['fakeDeviceModel'] as String? ?? 'Pixel 9 Pro',
@@ -35,6 +40,7 @@ class ClonedInstance {
       iconBase64: map['iconBase64'] as String? ?? '',
       isPrimary: map['isPrimary'] as bool? ?? true,
       badgeColor: map['badgeColor'] as String? ?? '#FF6D00',
+      clonedPackageName: map['clonedPackageName'] as String? ?? pkg,
     );
   }
 
