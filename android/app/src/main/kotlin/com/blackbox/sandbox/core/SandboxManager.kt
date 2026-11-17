@@ -463,15 +463,8 @@ class SandboxManager(private val context: Context) {
                 val appInfo = pm.getApplicationInfo(packageName, 0)
                 val baseAppName = pm.getApplicationLabel(appInfo).toString()
 
-                var userId = 0
-                while (userId < 50 && instances.values.any { it.packageName == packageName && it.virtualUserId == userId }) {
-                    userId++
-                }
-
-                val cloneNum = userId + 1
-                val isPrimary = false // BlackBox Virtual Space clones are always MULTI (Pink SB); PRIMARY is reserved for Work Profile
-                val badgeColor = "#FF2D75"
-                val appName = if (!customName.isNullOrEmpty()) customName else "$baseAppName (SB$cloneNum)"
+                val workProfile = getWorkProfileUserHandle()
+                val hasPrimary = instances.values.any { it.packageName == packageName && it.isPrimary }
 
                 val instanceId = UUID.randomUUID().toString().substring(0, 8)
                 val fakeAndroidId = UUID.randomUUID().toString().replace("-", "").substring(0, 16)
@@ -483,35 +476,70 @@ class SandboxManager(private val context: Context) {
                 val apkFile = File(appInfo.sourceDir)
                 val initialSize = if (apkFile.exists()) apkFile.length() else 0L
 
-                val meta = ClonedInstance(
-                    instanceId = instanceId,
-                    packageName = packageName,
-                    appName = appName,
-                    fakeAndroidId = fakeAndroidId,
-                    fakeDeviceModel = fakeModel,
-                    playBillingEnabled = true,
-                    storageUsageBytes = initialSize,
-                    iconBase64 = iconBase64,
-                    isPrimary = isPrimary,
-                    badgeColor = badgeColor,
-                    clonedPackageName = packageName,
-                    virtualUserId = userId
-                )
-
-                emitCloneProgress(0.30, "Copying $baseAppName from device into Sandbox...", false, true)
-                val res = BlackBoxCore.get().installPackageAsUser(packageName, userId)
-                if (res != null && res.success) {
-                    emitCloneProgress(0.85, "Configuring isolated virtual storage & shortcut...", false, true)
+                if (workProfile != null && !hasPrimary) {
+                    // 1. Primary Clone -> Official Work Profile (Orange SB, best for Supercell/Promon games)
+                    val appName = if (!customName.isNullOrEmpty()) customName else "$baseAppName (Primary SB)"
+                    val meta = ClonedInstance(
+                        instanceId = instanceId,
+                        packageName = packageName,
+                        appName = appName,
+                        fakeAndroidId = fakeAndroidId,
+                        fakeDeviceModel = fakeModel,
+                        playBillingEnabled = true,
+                        storageUsageBytes = initialSize,
+                        iconBase64 = iconBase64,
+                        isPrimary = true,
+                        badgeColor = "#FF6D00",
+                        clonedPackageName = packageName,
+                        virtualUserId = -1
+                    )
+                    emitCloneProgress(0.35, "Provisioning $baseAppName into Work Profile...", false, true)
+                    installAppIntoWorkProfile(packageName)
                     instances[meta.instanceId] = meta
                     savePersistedInstances()
                     Handler(Looper.getMainLooper()).post {
                         createHomeScreenShortcut(meta.instanceId, meta.packageName, meta.appName, meta.badgeColor)
                     }
-                    emitCloneProgress(1.0, "$appName cloned & ready! (No install required)", true, true)
+                    emitCloneProgress(1.0, "$appName cloned into Work Profile!", true, true)
                 } else {
-                    val errMsg = res?.msg ?: "Virtual install failed"
-                    Log.e(TAG, "BlackBox installPackageAsUser failed: $errMsg")
-                    emitCloneProgress(1.0, errMsg, true, false)
+                    // 2. Multi Clone -> BlackBox Virtual Space (Pink SB, zero Work Profile needed)
+                    var userId = 0
+                    while (userId < 50 && instances.values.any { !it.isPrimary && it.packageName == packageName && it.virtualUserId == userId }) {
+                        userId++
+                    }
+
+                    val cloneNum = userId + 1
+                    val appName = if (!customName.isNullOrEmpty()) customName else "$baseAppName (SB$cloneNum)"
+                    val meta = ClonedInstance(
+                        instanceId = instanceId,
+                        packageName = packageName,
+                        appName = appName,
+                        fakeAndroidId = fakeAndroidId,
+                        fakeDeviceModel = fakeModel,
+                        playBillingEnabled = true,
+                        storageUsageBytes = initialSize,
+                        iconBase64 = iconBase64,
+                        isPrimary = false,
+                        badgeColor = "#FF2D75",
+                        clonedPackageName = packageName,
+                        virtualUserId = userId
+                    )
+
+                    emitCloneProgress(0.30, "Copying $baseAppName from device into Sandbox...", false, true)
+                    val res = BlackBoxCore.get().installPackageAsUser(packageName, userId)
+                    if (res != null && res.success) {
+                        emitCloneProgress(0.85, "Configuring isolated virtual storage & shortcut...", false, true)
+                        instances[meta.instanceId] = meta
+                        savePersistedInstances()
+                        Handler(Looper.getMainLooper()).post {
+                            createHomeScreenShortcut(meta.instanceId, meta.packageName, meta.appName, meta.badgeColor)
+                        }
+                        emitCloneProgress(1.0, "$appName cloned & ready! (No install required)", true, true)
+                    } else {
+                        val errMsg = res?.msg ?: "Virtual install failed"
+                        Log.e(TAG, "BlackBox installPackageAsUser failed: $errMsg")
+                        emitCloneProgress(1.0, errMsg, true, false)
+                    }
                 }
             } catch (e: Throwable) {
                 Log.e(TAG, "cloneAppAsync error", e)
@@ -663,8 +691,8 @@ class SandboxManager(private val context: Context) {
 
         Log.d(TAG, "launchApp called for $packageName (instanceId=$instanceId, userId=$userId, isPrimary=$isPrimary)")
 
-        // 0. BlackBox In-App Virtualization Engine (runs without Work Profile or APK installation!)
-        if (instanceId != "core") {
+        // 0. BlackBox In-App Virtualization Engine (for MULTI clones, runs without Work Profile or APK installation!)
+        if (instanceId != "core" && !isPrimary && userId >= 0) {
             try {
                 val bb = BlackBoxCore.get()
                 if (bb.isInstalled(packageName, userId)) {

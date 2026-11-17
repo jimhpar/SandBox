@@ -21,7 +21,7 @@ class SandboxApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Sandbox v2.2.2 - Blackbox THC',
+      title: 'Sandbox v2.2.3 - Blackbox THC',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF0D0F18),
