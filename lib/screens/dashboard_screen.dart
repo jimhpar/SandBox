@@ -20,6 +20,15 @@ class _DashboardScreenState extends State<DashboardScreen>
   bool _isLoading = true;
   Map<String, dynamic> _servicesStatus = {};
 
+  // Sticky Bottom Operation Progress State
+  bool _isOperationVisible = false;
+  bool _isOperationComplete = false;
+  String _operationTitle = "";
+  String _operationSubtitle = "";
+  double _operationProgress = 0.0;
+  Color _operationColor = const Color(0xFF00E5FF);
+  IconData _operationIcon = Icons.sync;
+
   @override
   void initState() {
     super.initState();
@@ -166,7 +175,9 @@ class _DashboardScreenState extends State<DashboardScreen>
                             separatorBuilder: (_, _) => const Divider(color: Color(0xFF232738), height: 1),
                             itemBuilder: (context, index) {
                               final app = availableApps[index];
+                              final pkgName = app['packageName'] as String? ?? '';
                               final iconBase64 = app['iconBase64'] as String? ?? '';
+                              final alreadyCloned = _instances.any((inst) => inst.packageName == pkgName);
 
                               return ListTile(
                                 contentPadding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
@@ -187,45 +198,34 @@ class _DashboardScreenState extends State<DashboardScreen>
                                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 15),
                                 ),
                                 subtitle: Text(
-                                  app['packageName'] ?? '',
+                                  pkgName,
                                   style: TextStyle(color: Colors.grey[500], fontSize: 12),
                                 ),
-                                trailing: ElevatedButton(
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: const Color(0xFF00E5FF),
-                                    foregroundColor: Colors.black,
-                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                                  ),
-                                  onPressed: () async {
-                                    Navigator.pop(context);
-                                    _showHudNotification(
-                                      "Provisioning ${app['appName']} locally into Dual Space...",
-                                      icon: Icons.sync,
-                                      color: const Color(0xFF00E5FF),
-                                    );
-                                    final newClone = await _service.cloneApp(
-                                      app['packageName']!,
-                                    );
-                                    if (!mounted) return;
-                                    await _loadData();
-                                    if (newClone != null) {
-                                      _showHudNotification(
-                                        newClone.isPrimary
-                                            ? "Cloned ${app['appName']} (Primary - Orange SB Badge)"
-                                            : "Cloned ${app['appName']} (Multi - Pink SB Badge)",
-                                        icon: Icons.check_circle,
-                                        color: const Color(0xFF00FF88),
-                                      );
-                                    } else {
-                                      _showHudNotification(
-                                        "Failed to clone ${app['appName']}",
-                                        icon: Icons.error_outline,
-                                        color: Colors.redAccent,
-                                      );
-                                    }
-                                  },
-                                  child: const Text("Clone", style: TextStyle(fontWeight: FontWeight.bold)),
-                                ),
+                                trailing: alreadyCloned
+                                    ? Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF00FF88).withValues(alpha: 0.15),
+                                          borderRadius: BorderRadius.circular(10),
+                                          border: Border.all(color: const Color(0xFF00FF88).withValues(alpha: 0.5)),
+                                        ),
+                                        child: const Text(
+                                          "CLONED",
+                                          style: TextStyle(color: Color(0xFF00FF88), fontWeight: FontWeight.bold, fontSize: 11),
+                                        ),
+                                      )
+                                    : ElevatedButton(
+                                        style: ElevatedButton.styleFrom(
+                                          backgroundColor: const Color(0xFF00E5FF),
+                                          foregroundColor: Colors.black,
+                                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                        ),
+                                        onPressed: () {
+                                          Navigator.pop(context);
+                                          _cloneWithProgress(app);
+                                        },
+                                        child: const Text("Clone", style: TextStyle(fontWeight: FontWeight.bold)),
+                                      ),
                               );
                             },
                           ),
@@ -370,7 +370,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                 ),
                 Text(
-                  "v2.0.5 • Blackbox THC",
+                  "v2.0.6 • Blackbox THC",
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 11,
@@ -420,16 +420,27 @@ class _DashboardScreenState extends State<DashboardScreen>
           ],
         ),
       ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)))
-          : TabBarView(
-              controller: _tabController,
-              children: [
-                _buildClonedAppsTab(),
-                _buildWorkSpaceCoreTab(),
-              ],
+      body: Stack(
+        children: [
+          _isLoading
+              ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)))
+              : TabBarView(
+                  controller: _tabController,
+                  children: [
+                    _buildClonedAppsTab(),
+                    _buildWorkSpaceCoreTab(),
+                  ],
+                ),
+          if (_isOperationVisible)
+            Positioned(
+              left: 14,
+              right: 14,
+              bottom: 16,
+              child: _buildStickyOperationBanner(),
             ),
-      floatingActionButton: _tabController.index == 0
+        ],
+      ),
+      floatingActionButton: (!_isOperationVisible && _tabController.index == 0)
           ? FloatingActionButton.extended(
               backgroundColor: const Color(0xFF00E5FF),
               foregroundColor: Colors.black,
@@ -442,6 +453,154 @@ class _DashboardScreenState extends State<DashboardScreen>
             )
           : null,
     );
+  }
+
+  Widget _buildStickyOperationBanner() {
+    final pct = (_operationProgress * 100).clamp(0, 100).toInt();
+    return Material(
+      elevation: 14,
+      borderRadius: BorderRadius.circular(16),
+      color: const Color(0xFF141724),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: _operationColor, width: 1.6),
+          boxShadow: [
+            BoxShadow(
+              color: _operationColor.withValues(alpha: 0.2),
+              blurRadius: 16,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(_operationIcon, color: _operationColor, size: 22),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _operationTitle,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Text(
+                  "$pct%",
+                  style: TextStyle(
+                    color: _operationColor,
+                    fontWeight: FontWeight.w900,
+                    fontSize: 13,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _operationSubtitle,
+              style: TextStyle(color: Colors.grey[400], fontSize: 12),
+            ),
+            const SizedBox(height: 10),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: _operationProgress,
+                minHeight: 7,
+                backgroundColor: const Color(0xFF22273B),
+                valueColor: AlwaysStoppedAnimation<Color>(_operationColor),
+              ),
+            ),
+            if (_isOperationComplete) ...[
+              const SizedBox(height: 12),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: _operationColor,
+                    foregroundColor: Colors.black,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  icon: const Icon(Icons.check, size: 18),
+                  label: const Text(
+                    "DONE",
+                    style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0),
+                  ),
+                  onPressed: () {
+                    setState(() {
+                      _isOperationVisible = false;
+                    });
+                  },
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _cloneWithProgress(Map<String, dynamic> app) async {
+    final appName = app['appName'] as String? ?? 'App';
+    final pkgName = app['packageName'] as String? ?? '';
+    if (pkgName.isEmpty) return;
+
+    setState(() {
+      _isOperationVisible = true;
+      _isOperationComplete = false;
+      _operationTitle = "Cloning $appName";
+      _operationSubtitle = "Preparing isolated container...";
+      _operationProgress = 0.15;
+      _operationColor = const Color(0xFF00E5FF);
+      _operationIcon = Icons.copy_all;
+    });
+
+    await Future.delayed(const Duration(milliseconds: 250));
+    if (!mounted) return;
+    setState(() {
+      _operationSubtitle = "Copying APK from device storage (Offline)...";
+      _operationProgress = 0.45;
+    });
+
+    final newClone = await _service.cloneApp(pkgName);
+    if (!mounted) return;
+
+    setState(() {
+      _operationSubtitle = "Activating $appName in Dual Space Work Profile...";
+      _operationProgress = 0.78;
+    });
+
+    await Future.delayed(const Duration(milliseconds: 700));
+    await _loadData();
+    if (!mounted) return;
+
+    if (newClone != null) {
+      setState(() {
+        _operationTitle = "$appName Cloned!";
+        _operationSubtitle = "Copied locally from device storage. Ready to launch.";
+        _operationProgress = 1.0;
+        _operationColor = const Color(0xFF00FF88);
+        _operationIcon = Icons.check_circle;
+        _isOperationComplete = true;
+      });
+    } else {
+      setState(() {
+        _operationTitle = "Cloning Failed";
+        _operationSubtitle = "Could not copy $appName into Work Profile.";
+        _operationProgress = 1.0;
+        _operationColor = Colors.redAccent;
+        _operationIcon = Icons.error_outline;
+        _isOperationComplete = true;
+      });
+    }
   }
 
   // TAB 1: User Cloned Apps & Games
@@ -761,21 +920,55 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
 
     if (confirm == true) {
-      _showHudNotification(
-        "Removing Work Profile Dual Space...",
-        icon: Icons.delete_sweep,
-        color: Colors.redAccent,
-      );
-      final ok = await _service.removeWorkProfile();
-      await Future.delayed(const Duration(milliseconds: 1500));
-      await _loadData();
-      if (ok) {
-        _showHudNotification(
-          "Work Profile Dual Space removed successfully",
-          icon: Icons.check_circle,
-          color: const Color(0xFF00FF88),
-        );
+      setState(() {
+        _isOperationVisible = true;
+        _isOperationComplete = false;
+        _operationTitle = "Removing Dual Space";
+        _operationSubtitle = "Wiping Work Profile, accounts & cloned data...";
+        _operationProgress = 0.20;
+        _operationColor = Colors.redAccent;
+        _operationIcon = Icons.delete_sweep;
+      });
+
+      await _service.removeWorkProfile();
+      if (!mounted) return;
+
+      bool removed = false;
+      for (int i = 0; i < 12; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
+        if (!mounted) return;
+        final status = await _service.checkRealServicesStatus();
+        final active = status['workProfileActive'] == true;
+        setState(() {
+          _operationProgress = (0.30 + (i + 1) * 0.05).clamp(0.30, 0.92);
+          _operationSubtitle = active
+              ? "Waiting for Android OS to delete Work Profile..."
+              : "Finalizing Dual Space cleanup...";
+        });
+        if (!active) {
+          removed = true;
+          break;
+        }
       }
+
+      await _loadData();
+      if (!mounted) return;
+
+      setState(() {
+        _operationProgress = 1.0;
+        _isOperationComplete = true;
+        if (removed) {
+          _operationTitle = "Dual Space Removed!";
+          _operationSubtitle = "Work Profile and all isolated accounts deleted.";
+          _operationColor = const Color(0xFF00FF88);
+          _operationIcon = Icons.check_circle;
+        } else {
+          _operationTitle = "Removal Incomplete";
+          _operationSubtitle = "Could not verify removal. Check Settings > Accounts > Work.";
+          _operationColor = Colors.amberAccent;
+          _operationIcon = Icons.warning_amber_rounded;
+        }
+      });
     }
   }
 

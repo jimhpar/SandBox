@@ -53,7 +53,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Cross-profile Work Space Bridge Activity (Enabled inside Managed Work Profile) -->
+        <!-- Cross-profile Work Space Bridge Activity (Enabled only inside Managed Work Profile) -->
         <activity
             android:name=".core.SandboxWorkProfileBridgeActivity"
             android:exported="true"
@@ -61,6 +61,10 @@
             android:theme="@android:style/Theme.Translucent.NoTitleBar"
             android:excludeFromRecents="true"
             android:noHistory="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="com.blackbox.sandbox.ACTION_WORK_PROFILE_BRIDGE" />
                 <category android:name="android.intent.category.DEFAULT" />

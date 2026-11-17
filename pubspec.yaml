@@ -1,8 +1,8 @@
 name: sandbox
-description: "Sandbox v2.0.5 by Blackbox THC - Robust Dual Space & Isolated App Cloning Environment with Real GMS, Play Billing & Work Profile Management"
+description: "Sandbox v2.0.6 by Blackbox THC - Robust Dual Space & Isolated App Cloning Environment with Real GMS, Play Billing & Work Profile Management"
 publish_to: 'none'
 
-version: 2.0.5+205
+version: 2.0.6+206
 
 environment:
   sdk: ^3.13.7

@@ -191,34 +191,55 @@ class SandboxManager(private val context: Context) {
     }
 
     private fun sendBridgeCommand(action: String, targetPkg: String? = null): Boolean {
+        val workProfile = getWorkProfileUserHandle() ?: return false
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return false
+
+        val extras = Bundle().apply {
+            putString("bridge_action", action)
+            if (!targetPkg.isNullOrEmpty()) {
+                putString("target_pkg", targetPkg)
+            }
+        }
+
+        // Primary: Launch SandboxWorkProfileBridgeActivity inside the Work Profile via LauncherApps
+        try {
+            launcherApps.startMainActivity(
+                ComponentName(context.packageName, "com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity"),
+                workProfile,
+                null,
+                extras
+            )
+            Log.d(TAG, "Dispatched bridge command ($action, target=$targetPkg) to SandboxWorkProfileBridgeActivity in $workProfile")
+            return true
+        } catch (e: Exception) {
+            Log.w(TAG, "LauncherApps BridgeActivity ($action) failed: ${e.message}")
+        }
+
+        // Fallback 1: Try MainActivity in Work Profile
+        try {
+            launcherApps.startMainActivity(
+                ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
+                workProfile,
+                null,
+                extras
+            )
+            Log.d(TAG, "Dispatched bridge command ($action) to MainActivity in $workProfile")
+            return true
+        } catch (e: Exception) {
+            Log.w(TAG, "LauncherApps MainActivity ($action) failed: ${e.message}")
+        }
+
+        // Fallback 2: CrossProfileIntentFilter implicit Intent
         return try {
             val intent = Intent(SandboxDeviceAdminReceiver.ACTION_WORK_PROFILE_BRIDGE).apply {
                 addCategory(Intent.CATEGORY_DEFAULT)
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NO_ANIMATION)
-                putExtra("bridge_action", action)
-                if (!targetPkg.isNullOrEmpty()) {
-                    putExtra("target_pkg", targetPkg)
-                }
+                putExtras(extras)
             }
             context.startActivity(intent)
-            Log.d(TAG, "Dispatched cross-profile bridge intent: action=$action, target=$targetPkg")
             true
         } catch (e: Exception) {
-            Log.w(TAG, "Cross-profile bridge intent ($action) failed: ${e.message}")
-            // Fallback: wake up Work Profile MainActivity if still enabled
-            val workProfile = getWorkProfileUserHandle()
-            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
-            if (workProfile != null && launcherApps != null) {
-                try {
-                    launcherApps.startMainActivity(
-                        ComponentName(context.packageName, "com.blackbox.sandbox.MainActivity"),
-                        workProfile,
-                        null,
-                        null
-                    )
-                    return true
-                } catch (_: Exception) {}
-            }
+            Log.e(TAG, "All cross-profile bridge dispatch methods failed for $action: ${e.message}")
             false
         }
     }
@@ -561,28 +582,22 @@ class SandboxManager(private val context: Context) {
         }
 
         // 2. Secondary Clones (Multi-Instance):
-        // Launch in isolated container mode with instance parameters
-        Log.d(TAG, "Launching secondary multi-instance clone for $packageName")
-        return try {
-            val pm = context.packageManager
-            val launchIntent = pm.getLaunchIntentForPackage(packageName)
-            if (launchIntent != null) {
-                launchIntent.addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_MULTIPLE_TASK
-                )
-                launchIntent.putExtra("is_sandbox_clone", true)
-                launchIntent.putExtra("sandbox_instance_id", instanceId)
-                launchIntent.putExtra("sandbox_isolated_vfs", true)
-                context.startActivity(launchIntent)
-                true
-            } else {
-                false
+        // Never fall back to launching the original User 0 app; route to Work Profile if active
+        val workProfile = getWorkProfileUserHandle()
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+        if (workProfile != null && launcherApps != null) {
+            try {
+                val activities = launcherApps.getActivityList(packageName, workProfile)
+                if (activities.isNotEmpty()) {
+                    launcherApps.startMainActivity(activities[0].componentName, workProfile, null, null)
+                    return true
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Secondary Work Profile launch check failed: ${e.message}")
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error launching secondary clone: $packageName", e)
-            false
         }
+        Log.w(TAG, "Blocked launching User 0 original app for $packageName; isolated container required.")
+        return false
     }
 
     fun createHomeScreenShortcut(instanceId: String, packageName: String, appName: String, badgeColor: String = "#FF6D00"): Boolean {
