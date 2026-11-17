@@ -464,16 +464,13 @@ class SandboxManager(private val context: Context) {
                 val baseAppName = pm.getApplicationLabel(appInfo).toString()
 
                 var userId = 0
-                while (userId < 50 && (
-                    instances.values.any { it.packageName == packageName && it.virtualUserId == userId } ||
-                    try { BlackBoxCore.get().isInstalled(packageName, userId) } catch (_: Throwable) { false }
-                )) {
+                while (userId < 50 && instances.values.any { it.packageName == packageName && it.virtualUserId == userId }) {
                     userId++
                 }
 
                 val cloneNum = userId + 1
-                val isPrimary = (userId == 0)
-                val badgeColor = if (isPrimary) "#FF6D00" else "#FF2D75"
+                val isPrimary = false // BlackBox Virtual Space clones are always MULTI (Pink SB); PRIMARY is reserved for Work Profile
+                val badgeColor = "#FF2D75"
                 val appName = if (!customName.isNullOrEmpty()) customName else "$baseAppName (SB$cloneNum)"
 
                 val instanceId = UUID.randomUUID().toString().substring(0, 8)
