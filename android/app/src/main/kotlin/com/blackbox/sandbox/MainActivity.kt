@@ -12,6 +12,8 @@ class MainActivity : FlutterActivity() {
 
     private val CHANNEL = "com.blackbox.sandbox/engine"
     private lateinit var sandboxManager: SandboxManager
+    private val bgExecutor = java.util.concurrent.Executors.newCachedThreadPool()
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -113,11 +115,13 @@ class MainActivity : FlutterActivity() {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
             when (call.method) {
                 "getInstalledApps" -> {
-                    try {
-                        val apps = sandboxManager.getInstalledApps()
-                        result.success(apps)
-                    } catch (e: Exception) {
-                        result.error("ERROR", e.message, null)
+                    bgExecutor.execute {
+                        try {
+                            val apps = sandboxManager.getInstalledApps()
+                            mainHandler.post { result.success(apps) }
+                        } catch (e: Exception) {
+                            mainHandler.post { result.error("ERROR", e.message, null) }
+                        }
                     }
                 }
                 "cloneAppAsync" -> {
@@ -153,29 +157,33 @@ class MainActivity : FlutterActivity() {
                     }
                 }
                 "getInstances" -> {
-                    val instances = sandboxManager.getInstances().map {
-                        mapOf(
-                            "instanceId" to it.instanceId,
-                            "packageName" to it.packageName,
-                            "clonedPackageName" to it.clonedPackageName,
-                            "appName" to it.appName,
-                            "fakeAndroidId" to it.fakeAndroidId,
-                            "fakeDeviceModel" to it.fakeDeviceModel,
-                            "playBillingEnabled" to it.playBillingEnabled,
-                            "storageUsageBytes" to it.storageUsageBytes,
-                            "iconBase64" to it.iconBase64,
-                            "isPrimary" to it.isPrimary,
-                            "badgeColor" to it.badgeColor
-                        )
+                    bgExecutor.execute {
+                        val instances = sandboxManager.getInstances().map {
+                            mapOf(
+                                "instanceId" to it.instanceId,
+                                "packageName" to it.packageName,
+                                "clonedPackageName" to it.clonedPackageName,
+                                "appName" to it.appName,
+                                "fakeAndroidId" to it.fakeAndroidId,
+                                "fakeDeviceModel" to it.fakeDeviceModel,
+                                "playBillingEnabled" to it.playBillingEnabled,
+                                "storageUsageBytes" to it.storageUsageBytes,
+                                "iconBase64" to it.iconBase64,
+                                "isPrimary" to it.isPrimary,
+                                "badgeColor" to it.badgeColor
+                            )
+                        }
+                        mainHandler.post { result.success(instances) }
                     }
-                    result.success(instances)
                 }
                 "launchApp" -> {
                     val instanceId = call.argument<String>("instanceId") ?: ""
                     val packageName = call.argument<String>("packageName") ?: ""
                     if (packageName.isNotEmpty()) {
-                        val success = sandboxManager.launchApp(instanceId, packageName)
-                        result.success(success)
+                        bgExecutor.execute {
+                            val success = sandboxManager.launchApp(instanceId, packageName)
+                            mainHandler.post { result.success(success) }
+                        }
                     } else {
                         result.error("INVALID_ARGS", "Package name required", null)
                     }

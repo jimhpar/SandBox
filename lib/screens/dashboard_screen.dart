@@ -191,7 +191,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    "Select an app to clone into Sandbox. Primary clones are provisioned locally into Work Profile with zero internet data required.",
+                    "Select an app to clone into Sandbox. Clones run inside Sandbox's isolated virtual space with zero APK install required.",
                     style: TextStyle(fontSize: 13, color: Colors.grey[400]),
                   ),
                   const SizedBox(height: 16),
@@ -393,7 +393,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                 ),
                 Text(
-                  "v2.2.0 • Blackbox THC",
+                  "v2.2.1 • Blackbox THC",
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 11,
