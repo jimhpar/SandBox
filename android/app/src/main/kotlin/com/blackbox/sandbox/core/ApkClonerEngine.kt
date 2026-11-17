@@ -201,10 +201,10 @@ class ApkClonerEngine(private val context: Context) {
         val signer = ApkSigner.Builder(listOf(signerConfig))
             .setInputApk(unsignedApk)
             .setOutputApk(signedApk)
-            .setV1SigningEnabled(true)
+            .setV1SigningEnabled(false)
             .setV2SigningEnabled(true)
             .setV3SigningEnabled(true)
-            .setMinSdkVersion(21)
+            .setMinSdkVersion(24)
             .build()
 
         signer.sign()

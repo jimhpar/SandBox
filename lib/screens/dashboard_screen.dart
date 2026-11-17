@@ -393,7 +393,7 @@ class _DashboardScreenState extends State<DashboardScreen>
                   ),
                 ),
                 Text(
-                  "v2.1.0 • Blackbox THC",
+                  "v2.1.1 • Blackbox THC",
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 11,
