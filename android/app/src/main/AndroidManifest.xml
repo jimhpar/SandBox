@@ -53,6 +53,17 @@
             </intent-filter>
         </activity>
 
+        <!-- Cross-profile Work Space Bridge Activity -->
+        <activity
+            android:name=".core.SandboxWorkProfileBridgeActivity"
+            android:exported="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+            </intent-filter>
+        </activity>
+
         <!-- Work Profile Device Admin Receiver for Dual Space Isolation -->
         <receiver
             android:name=".core.SandboxDeviceAdminReceiver"

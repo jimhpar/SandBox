@@ -2,6 +2,7 @@ package com.blackbox.sandbox.core
 
 import android.app.Activity
 import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -20,6 +21,7 @@ import android.graphics.drawable.Drawable
 import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
@@ -186,6 +188,133 @@ class SandboxManager(private val context: Context) {
         }
     }
 
+    fun removeWorkProfile(): Boolean {
+        val workProfile = getWorkProfileUserHandle()
+        if (workProfile == null) {
+            Log.d(TAG, "No active Work Profile to remove.")
+            return true
+        }
+
+        try {
+            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+            if (launcherApps != null) {
+                val extras = Bundle().apply {
+                    putString("bridge_action", "wipe")
+                }
+                launcherApps.startMainActivity(
+                    ComponentName(context.packageName, "com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity"),
+                    workProfile,
+                    null,
+                    extras
+                )
+                Log.d(TAG, "Sent wipe command to Work Profile Bridge Activity.")
+            }
+            instances.clear()
+            savePersistedInstances()
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error requesting Work Profile removal", e)
+        }
+        return false
+    }
+
+    fun openWorkProfileAddAccount(): Boolean {
+        val workProfile = getWorkProfileUserHandle() ?: return false
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return false
+
+        return try {
+            val extras = Bundle().apply {
+                putString("bridge_action", "add_account")
+            }
+            launcherApps.startMainActivity(
+                ComponentName(context.packageName, "com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity"),
+                workProfile,
+                null,
+                extras
+            )
+            Log.d(TAG, "Sent add_account command to Work Profile Bridge Activity.")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error opening Work Profile add account", e)
+            false
+        }
+    }
+
+    fun installAppIntoWorkProfile(packageName: String): Boolean {
+        val workProfile = getWorkProfileUserHandle() ?: return false
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return false
+
+        try {
+            val existing = launcherApps.getActivityList(packageName, workProfile)
+            if (existing.isNotEmpty()) {
+                Log.d(TAG, "Package $packageName is already installed in Work Profile.")
+                return true
+            }
+
+            val extras = Bundle().apply {
+                putString("bridge_action", "install")
+                putString("target_pkg", packageName)
+            }
+            launcherApps.startMainActivity(
+                ComponentName(context.packageName, "com.blackbox.sandbox.core.SandboxWorkProfileBridgeActivity"),
+                workProfile,
+                null,
+                extras
+            )
+            Log.d(TAG, "Dispatched instant local provisioning for $packageName into Work Profile.")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "Error installing $packageName into Work Profile via bridge", e)
+        }
+        return false
+    }
+
+    fun getWorkProfileCoreApps(): List<Map<String, Any>> {
+        val workProfile = getWorkProfileUserHandle() ?: return emptyList()
+        val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps ?: return emptyList()
+
+        val corePackages = setOf(
+            "com.android.vending",
+            "com.google.android.gms",
+            "com.google.android.contacts",
+            "com.android.contacts",
+            "com.google.android.documentsui",
+            "com.android.documentsui",
+            "com.google.android.gm",
+            "com.android.dialer",
+            "com.google.android.dialer"
+        )
+
+        val resultList = mutableListOf<Map<String, Any>>()
+
+        try {
+            val activities = launcherApps.getActivityList(null, workProfile)
+            for (act in activities) {
+                val pkgName = act.applicationInfo.packageName
+                if (pkgName == context.packageName) continue
+
+                val isCore = corePackages.contains(pkgName) || (act.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                if (isCore) {
+                    val label = act.label.toString()
+                    val iconDrawable = act.getBadgedIcon(0)
+                    val iconBase64 = drawableToBase64(iconDrawable)
+
+                    resultList.add(mapOf(
+                        "packageName" to pkgName,
+                        "appName" to label,
+                        "iconBase64" to iconBase64,
+                        "componentName" to act.componentName.flattenToString(),
+                        "isPlayStore" to (pkgName == "com.android.vending")
+                    ))
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying Work Profile core apps", e)
+        }
+
+        return resultList.distinctBy { it["packageName"] }
+    }
+
     fun getInstalledApps(): List<Map<String, Any>> {
         val pm = context.packageManager
         val installed = pm.getInstalledApplications(PackageManager.GET_META_DATA)
@@ -263,6 +392,11 @@ class SandboxManager(private val context: Context) {
         instances[instanceId] = instance
         savePersistedInstances()
 
+        // Local instant provisioning into Work Profile if Primary
+        if (isPrimary) {
+            installAppIntoWorkProfile(packageName)
+        }
+
         createHomeScreenShortcut(instanceId, packageName, appName, badgeColor)
 
         return instance
@@ -270,6 +404,70 @@ class SandboxManager(private val context: Context) {
 
     fun getInstances(): List<ClonedInstance> {
         val pm = context.packageManager
+        val workProfile = getWorkProfileUserHandle()
+
+        // Dynamic OS Discovery: Query actual apps present in Work Profile
+        if (workProfile != null) {
+            val launcherApps = context.getSystemService(Context.LAUNCHER_APPS_SERVICE) as? LauncherApps
+            if (launcherApps != null) {
+                try {
+                    val activities = launcherApps.getActivityList(null, workProfile)
+                    val corePackages = setOf(
+                        "com.android.vending", "com.google.android.gms",
+                        "com.google.android.contacts", "com.android.contacts",
+                        "com.google.android.documentsui", "com.android.documentsui",
+                        "com.google.android.gm", "com.android.dialer",
+                        "com.google.android.dialer", context.packageName
+                    )
+
+                    for (act in activities) {
+                        val pkg = act.applicationInfo.packageName
+                        val isSystemApp = (act.applicationInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+                        // Only user-installed apps (like Hay Day, games, social) are added to Cloned Apps (Tab 1).
+                        // System/preinstalled apps (Camera, Chrome, Calculator, Play Store, etc.) stay in Work Space Core (Tab 2).
+                        if (!isSystemApp && pkg != context.packageName) {
+                            val alreadyTracked = instances.values.any { it.packageName == pkg }
+                            if (!alreadyTracked) {
+                                val instId = UUID.randomUUID().toString().substring(0, 8)
+                                val label = act.label.toString()
+                                val iconBase64 = drawableToBase64(act.getBadgedIcon(0))
+                                val newInst = ClonedInstance(
+                                    instanceId = instId,
+                                    packageName = pkg,
+                                    appName = "$label (Primary SB)",
+                                    fakeAndroidId = UUID.randomUUID().toString().replace("-", "").substring(0, 16),
+                                    fakeDeviceModel = "Google Pixel 9 Pro",
+                                    playBillingEnabled = true,
+                                    storageUsageBytes = 0L,
+                                    iconBase64 = iconBase64,
+                                    isPrimary = true,
+                                    badgeColor = "#FF6D00"
+                                )
+                                instances[instId] = newInst
+                                savePersistedInstances()
+                                Log.d(TAG, "Auto-discovered user clone in Work Profile: $pkg ($label)")
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error during dynamic Work Profile sync: ${e.message}")
+                }
+            }
+        }
+
+        // Ensure system apps are excluded from Cloned Apps tab
+        val removed = instances.entries.removeIf { entry ->
+            try {
+                val info = pm.getApplicationInfo(entry.value.packageName, 0)
+                (info.flags and ApplicationInfo.FLAG_SYSTEM) != 0
+            } catch (e: Exception) {
+                false
+            }
+        }
+        if (removed) {
+            savePersistedInstances()
+        }
+
         return instances.values.map { inst ->
             val vfsUsage = vfs.getInstanceStorageUsage(inst.instanceId, inst.packageName)
             val apkSize = try {

@@ -165,6 +165,44 @@ class SandboxService {
     return false;
   }
 
+  Future<bool> removeWorkProfile() async {
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        final bool? res = await _androidChannel.invokeMethod('removeWorkProfile');
+        return res ?? false;
+      }
+    } catch (e) {
+      debugPrint('Error removing work profile: $e');
+    }
+    return false;
+  }
+
+  Future<bool> openWorkProfileAddAccount() async {
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        final bool? res = await _androidChannel.invokeMethod('openWorkProfileAddAccount');
+        return res ?? false;
+      }
+    } catch (e) {
+      debugPrint('Error opening Work Profile add account: $e');
+    }
+    return false;
+  }
+
+  Future<List<Map<String, dynamic>>> getWorkProfileCoreApps() async {
+    try {
+      if (!kIsWeb && Platform.isAndroid) {
+        final List<dynamic>? res = await _androidChannel.invokeListMethod('getWorkProfileCoreApps');
+        if (res != null) {
+          return res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+        }
+      }
+    } catch (e) {
+      debugPrint('Error fetching Work Profile core apps: $e');
+    }
+    return [];
+  }
+
   Future<Map<String, dynamic>> checkRealServicesStatus() async {
     try {
       if (!kIsWeb && Platform.isAndroid) {

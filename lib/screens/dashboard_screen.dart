@@ -10,25 +10,37 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen> with SingleTickerProviderStateMixin {
   final SandboxService _service = SandboxService();
+  late TabController _tabController;
+
   List<ClonedInstance> _instances = [];
+  List<Map<String, dynamic>> _coreApps = [];
   bool _isLoading = true;
   Map<String, dynamic> _servicesStatus = {};
 
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 2, vsync: this);
     _loadData();
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     final instances = await _service.getInstances();
+    final coreApps = await _service.getWorkProfileCoreApps();
     final services = await _service.checkRealServicesStatus();
     if (!mounted) return;
     setState(() {
       _instances = instances;
+      _coreApps = coreApps;
       _servicesStatus = services;
       _isLoading = false;
     });
@@ -39,6 +51,43 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final mb = bytes / (1024 * 1024);
     if (mb < 1000) return "${mb.toStringAsFixed(1)} MB";
     return "${(mb / 1024).toStringAsFixed(2)} GB";
+  }
+
+  void _showHudNotification(
+    String message, {
+    IconData icon = Icons.info_outline,
+    Color color = const Color(0xFF00E5FF),
+  }) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        backgroundColor: const Color(0xFF141724),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+          side: BorderSide(color: color, width: 1.5),
+        ),
+        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        content: Row(
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   void _showCloneModal() async {
@@ -87,7 +136,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                   const SizedBox(height: 6),
                   Text(
-                    "Select an app to permanently clone into Sandbox with an isolated environment and home screen shortcut.",
+                    "Select an app to clone into Sandbox. Primary clones are provisioned locally into Work Profile with zero internet data required.",
                     style: TextStyle(fontSize: 13, color: Colors.grey[400]),
                   ),
                   const SizedBox(height: 16),
@@ -135,23 +184,30 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                                   ),
                                   onPressed: () async {
-                                    final scaffoldMessenger = ScaffoldMessenger.of(context);
                                     Navigator.pop(context);
+                                    _showHudNotification(
+                                      "Provisioning ${app['appName']} locally into Dual Space...",
+                                      icon: Icons.sync,
+                                      color: const Color(0xFF00E5FF),
+                                    );
                                     final newClone = await _service.cloneApp(
                                       app['packageName']!,
                                     );
                                     if (!mounted) return;
-                                    _loadData();
+                                    await _loadData();
                                     if (newClone != null) {
-                                      scaffoldMessenger.showSnackBar(
-                                        SnackBar(
-                                          backgroundColor: const Color(0xFF1E2235),
-                                          content: Text(
-                                            newClone.isPrimary
-                                                ? "Cloned ${app['appName']} (Primary - Orange SB Badge)"
-                                                : "Cloned ${app['appName']} (Multi-Instance - Pink SB Badge)",
-                                          ),
-                                        ),
+                                      _showHudNotification(
+                                        newClone.isPrimary
+                                            ? "Cloned ${app['appName']} (Primary - Orange SB Badge)"
+                                            : "Cloned ${app['appName']} (Multi - Pink SB Badge)",
+                                        icon: Icons.check_circle,
+                                        color: const Color(0xFF00FF88),
+                                      );
+                                    } else {
+                                      _showHudNotification(
+                                        "Failed to clone ${app['appName']}",
+                                        icon: Icons.error_outline,
+                                        color: Colors.redAccent,
                                       );
                                     }
                                   },
@@ -250,9 +306,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final isGmsActive = _servicesStatus['gmsActive'] == true;
-    final isBillingActive = _servicesStatus['playBillingActive'] == true;
-
     return Scaffold(
       backgroundColor: const Color(0xFF0D0F18),
       appBar: AppBar(
@@ -304,7 +357,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ),
                 ),
                 Text(
-                  "v2.0.2 • Blackbox THC",
+                  "v2.0.3 • Blackbox THC",
                   style: TextStyle(
                     color: Colors.grey[400],
                     fontSize: 11,
@@ -323,173 +376,466 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(width: 8),
         ],
+        bottom: TabBar(
+          controller: _tabController,
+          indicatorColor: const Color(0xFF00E5FF),
+          indicatorWeight: 3,
+          labelColor: const Color(0xFF00E5FF),
+          unselectedLabelColor: Colors.grey[500],
+          labelStyle: const TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.8, fontSize: 13),
+          tabs: [
+            Tab(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.apps, size: 18),
+                  const SizedBox(width: 8),
+                  Text("CLONED APPS (${_instances.length})"),
+                ],
+              ),
+            ),
+            Tab(
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  const Icon(Icons.work_outline, size: 18),
+                  const SizedBox(width: 8),
+                  Text("WORK SPACE (${_coreApps.length})"),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator(color: Color(0xFF00E5FF)))
-          : RefreshIndicator(
-              onRefresh: _loadData,
-              color: const Color(0xFF00E5FF),
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    // System Status Card (Google Play Services & Billing only)
-                    _buildRealServicesCard(isGmsActive, isBillingActive),
-                    const SizedBox(height: 22),
-
-                    // Cloned Apps Header
-                    Text(
-                      "CLONED APPS (${_instances.length})",
-                      style: const TextStyle(
-                        color: Colors.grey,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.2,
-                        fontSize: 13,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-
-                    // Cloned App Cards
-                    if (_instances.isEmpty)
-                      Center(
-                        child: Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 60),
-                          child: Column(
-                            children: [
-                              Icon(Icons.layers_clear_outlined, color: Colors.grey[600], size: 64),
-                              const SizedBox(height: 16),
-                              const Text(
-                                "No Cloned Apps Yet",
-                                style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                "Tap '+ CLONE APP' below to clone and isolate an app or game.",
-                                textAlign: TextAlign.center,
-                                style: TextStyle(color: Colors.grey[400], fontSize: 13),
-                              ),
-                            ],
-                          ),
-                        ),
-                      )
-                    else
-                      ..._instances.map((inst) => _buildClonedAppCard(inst)),
-                  ],
-                ),
-              ),
+          : TabBarView(
+              controller: _tabController,
+              children: [
+                _buildClonedAppsTab(),
+                _buildWorkSpaceCoreTab(),
+              ],
             ),
-      floatingActionButton: FloatingActionButton.extended(
-        backgroundColor: const Color(0xFF00E5FF),
-        foregroundColor: Colors.black,
-        icon: const Icon(Icons.add, fontWeight: FontWeight.bold),
-        label: const Text(
-          "CLONE APP",
-          style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0),
-        ),
-        onPressed: _showCloneModal,
-      ),
+      floatingActionButton: _tabController.index == 0
+          ? FloatingActionButton.extended(
+              backgroundColor: const Color(0xFF00E5FF),
+              foregroundColor: Colors.black,
+              icon: const Icon(Icons.add, fontWeight: FontWeight.bold),
+              label: const Text(
+                "CLONE APP",
+                style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 1.0),
+              ),
+              onPressed: _showCloneModal,
+            )
+          : null,
     );
   }
 
-  Widget _buildRealServicesCard(bool isGmsActive, bool isBillingActive) {
-    final isWorkProfileActive = _servicesStatus['workProfileActive'] == true;
-
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF141724),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: const Color(0xFF262C42)),
-      ),
-      child: Column(
-        children: [
-          // Work Profile Dual Space Banner
-          Container(
-            padding: const EdgeInsets.all(12),
-            decoration: BoxDecoration(
-              color: isWorkProfileActive
-                  ? const Color(0xFF00FF88).withValues(alpha: 0.1)
-                  : const Color(0xFFFF6D00).withValues(alpha: 0.1),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isWorkProfileActive ? const Color(0xFF00FF88) : const Color(0xFFFF6D00),
-                width: 1,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(
-                  isWorkProfileActive ? Icons.verified_user : Icons.security,
-                  color: isWorkProfileActive ? const Color(0xFF00FF88) : const Color(0xFFFF6D00),
-                  size: 24,
-                ),
-                const SizedBox(width: 12),
-                Expanded(
+  // TAB 1: User Cloned Apps & Games
+  Widget _buildClonedAppsTab() {
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: const Color(0xFF00E5FF),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (_instances.isEmpty)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 80),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        isWorkProfileActive
-                            ? "Work Profile Dual Space Active"
-                            : "Work Profile Setup Required",
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 13,
-                        ),
+                      Icon(Icons.layers_clear_outlined, color: Colors.grey[600], size: 64),
+                      const SizedBox(height: 16),
+                      const Text(
+                        "No Cloned Apps Yet",
+                        style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold),
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 8),
                       Text(
-                        isWorkProfileActive
-                            ? "Official 2nd Google Play Store & GMS Isolation Online."
-                            : "Enable official 2nd Google Play Store & GMS isolation for fresh accounts.",
-                        style: TextStyle(color: Colors.grey[400], fontSize: 11),
+                        "Tap '+ CLONE APP' below to clone and isolate an app or game.",
+                        textAlign: TextAlign.center,
+                        style: TextStyle(color: Colors.grey[400], fontSize: 13),
                       ),
                     ],
                   ),
                 ),
-                if (!isWorkProfileActive)
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFFF6D00),
-                      foregroundColor: Colors.white,
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                    ),
-                    onPressed: () async {
-                      final ok = await _service.provisionWorkProfile();
-                      if (ok) {
-                        _loadData();
-                      }
-                    },
-                    child: const Text("Activate", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+              )
+            else
+              ..._instances.map((inst) => _buildClonedAppCard(inst)),
+            const SizedBox(height: 80), // Fab padding
+          ],
+        ),
+      ),
+    );
+  }
+
+  // TAB 2: Work Space Core & System Services
+  Widget _buildWorkSpaceCoreTab() {
+    final isWorkProfileActive = _servicesStatus['workProfileActive'] == true;
+    final isGmsActive = _servicesStatus['gmsActive'] == true;
+    final isBillingActive = _servicesStatus['playBillingActive'] == true;
+
+    return RefreshIndicator(
+      onRefresh: _loadData,
+      color: const Color(0xFF00E5FF),
+      child: SingleChildScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Work Profile Management Card
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF141724),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: isWorkProfileActive ? const Color(0xFF00FF88).withValues(alpha: 0.4) : const Color(0xFFFF6D00).withValues(alpha: 0.4),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(
+                        isWorkProfileActive ? Icons.verified_user : Icons.security,
+                        color: isWorkProfileActive ? const Color(0xFF00FF88) : const Color(0xFFFF6D00),
+                        size: 26,
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              isWorkProfileActive ? "Work Profile Dual Space Active" : "Work Profile Not Configured",
+                              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 15),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              isWorkProfileActive
+                                  ? "Isolated multi-user container active with native GMS & Play Store."
+                                  : "Provision isolated Work Profile for complete hardware and account separation.",
+                              style: TextStyle(color: Colors.grey[400], fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
+                  const SizedBox(height: 14),
+                  Row(
+                    children: [
+                      if (!isWorkProfileActive)
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFFF6D00),
+                              foregroundColor: Colors.white,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              padding: const EdgeInsets.symmetric(vertical: 11),
+                            ),
+                            icon: const Icon(Icons.add_moderator, size: 18),
+                            label: const Text("SETUP WORK PROFILE", style: TextStyle(fontWeight: FontWeight.bold)),
+                            onPressed: () async {
+                              final ok = await _service.provisionWorkProfile();
+                              if (ok) _loadData();
+                            },
+                          ),
+                        )
+                      else ...[
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            style: OutlinedButton.styleFrom(
+                              foregroundColor: Colors.redAccent,
+                              side: const BorderSide(color: Colors.redAccent, width: 1.2),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                              padding: const EdgeInsets.symmetric(vertical: 11),
+                            ),
+                            icon: const Icon(Icons.delete_forever, size: 18),
+                            label: const Text("REMOVE DUAL SPACE", style: TextStyle(fontWeight: FontWeight.bold)),
+                            onPressed: _confirmRemoveWorkProfile,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Google Account in Work Space Card
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: const Color(0xFF141724),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: const Color(0xFF262C42)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF1E2235),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.account_circle, color: Color(0xFF00E5FF), size: 24),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              "Google Account & Cloud Saves",
+                              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              "Add a secondary Google account inside Work Profile for Play Games cloud sync.",
+                              style: TextStyle(color: Colors.grey[400], fontSize: 11),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton.icon(
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF1F2438),
+                        foregroundColor: const Color(0xFF00E5FF),
+                        side: const BorderSide(color: Color(0xFF00E5FF), width: 1),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                      ),
+                      icon: const Icon(Icons.person_add_alt_1, size: 18),
+                      label: const Text(
+                        "ADD / MANAGE GOOGLE ACCOUNT",
+                        style: TextStyle(fontWeight: FontWeight.bold, letterSpacing: 0.5),
+                      ),
+                      onPressed: () async {
+                        final ok = await _service.openWorkProfileAddAccount();
+                        if (ok) {
+                          _showHudNotification(
+                            "Opened Google Sign-in for Work Space",
+                            icon: Icons.account_circle,
+                            color: const Color(0xFF00E5FF),
+                          );
+                        } else {
+                          _showHudNotification(
+                            "Work Profile must be active to manage Google accounts",
+                            icon: Icons.warning_amber_rounded,
+                            color: Colors.amberAccent,
+                          );
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Services Status Row
+            Row(
+              children: [
+                Expanded(
+                  child: _buildStatusPill(
+                    title: "Google Play Services",
+                    statusText: isGmsActive ? "Active" : "Unavailable",
+                    isActive: isGmsActive,
+                    icon: Icons.cloud_done,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: _buildStatusPill(
+                    title: "Play Billing Bridge",
+                    statusText: isBillingActive ? "Active" : "Unavailable",
+                    isActive: isBillingActive,
+                    icon: Icons.payment,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 22),
+
+            // Core Apps Header
+            Text(
+              "WORK SPACE CORE APPS (${_coreApps.length})",
+              style: const TextStyle(
+                color: Colors.grey,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.2,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            if (_coreApps.isEmpty)
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(24),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF141724),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(color: const Color(0xFF262C42)),
+                ),
+                child: Center(
+                  child: Text(
+                    isWorkProfileActive ? "Loading core services..." : "Activate Work Profile to view system utilities",
+                    style: TextStyle(color: Colors.grey[500], fontSize: 13),
+                  ),
+                ),
+              )
+            else
+              ..._coreApps.map((app) => _buildCoreAppTile(app)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _confirmRemoveWorkProfile() async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF161926),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.warning, color: Colors.redAccent),
+            SizedBox(width: 10),
+            Text("Remove Dual Space?", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: const Text(
+          "This will permanently delete the Work Profile and wipe all cloned apps, accounts, and dual space data.\n\nAre you sure you want to proceed?",
+          style: TextStyle(color: Colors.white70, fontSize: 13, height: 1.4),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text("CANCEL", style: TextStyle(color: Colors.grey)),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.redAccent,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text("CONFIRM REMOVE", style: TextStyle(fontWeight: FontWeight.bold)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm == true) {
+      _showHudNotification(
+        "Removing Work Profile Dual Space...",
+        icon: Icons.delete_sweep,
+        color: Colors.redAccent,
+      );
+      final ok = await _service.removeWorkProfile();
+      await Future.delayed(const Duration(seconds: 1));
+      await _loadData();
+      if (ok) {
+        _showHudNotification(
+          "Work Profile Dual Space removed successfully",
+          icon: Icons.check_circle,
+          color: const Color(0xFF00FF88),
+        );
+      }
+    }
+  }
+
+  Widget _buildCoreAppTile(Map<String, dynamic> app) {
+    final iconBase64 = app['iconBase64'] as String? ?? '';
+    final name = app['appName'] as String? ?? 'Core App';
+    final pkg = app['packageName'] as String? ?? '';
+    final isPlayStore = app['isPlayStore'] == true;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 10),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF141724),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFF22273B)),
+      ),
+      child: Row(
+        children: [
+          ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: iconBase64.isNotEmpty
+                ? Image.memory(
+                    base64Decode(iconBase64),
+                    width: 40,
+                    height: 40,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, _, _) => _fallbackAppIcon(),
+                  )
+                : _fallbackAppIcon(),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        name,
+                        style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14),
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    if (isPlayStore) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF00FF88).withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(5),
+                          border: Border.all(color: const Color(0xFF00FF88), width: 0.8),
+                        ),
+                        child: const Text("OFFICIAL", style: TextStyle(color: Color(0xFF00FF88), fontSize: 8, fontWeight: FontWeight.bold)),
+                      ),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                Text(pkg, style: TextStyle(color: Colors.grey[500], fontSize: 11)),
               ],
             ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Expanded(
-                child: _buildStatusPill(
-                  title: "Google Play Services",
-                  statusText: isGmsActive ? "Active" : "Unavailable",
-                  isActive: isGmsActive,
-                  icon: Icons.cloud_done,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: _buildStatusPill(
-                  title: "Play Billing Bridge",
-                  statusText: isBillingActive ? "Active" : "Unavailable",
-                  isActive: isBillingActive,
-                  icon: Icons.payment,
-                ),
-              ),
-            ],
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF1E2235),
+              foregroundColor: const Color(0xFF00E5FF),
+              side: const BorderSide(color: Color(0xFF00E5FF), width: 1),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            ),
+            onPressed: () {
+              _service.launchApp("core", pkg);
+            },
+            child: const Text("OPEN", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
           ),
         ],
       ),
@@ -560,7 +906,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              // Badged App Icon (Orange for Primary, Pink for Multi)
               _buildBadgedIcon(inst.iconBase64, inst.badgeColor),
               const SizedBox(width: 14),
               Expanded(
@@ -611,44 +956,35 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   ],
                 ),
               ),
-              // 3-Dot Context Menu
               PopupMenuButton<String>(
                 icon: const Icon(Icons.more_vert, color: Colors.grey),
                 color: const Color(0xFF1F2438),
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                 onSelected: (value) async {
-                  final messenger = ScaffoldMessenger.of(context);
                   if (value == 'shortcut') {
                     final ok = await _service.createShortcut(inst.instanceId, inst.packageName, inst.appName, inst.badgeColor);
-                    messenger.showSnackBar(
-                      SnackBar(
-                        backgroundColor: const Color(0xFF1E2235),
-                        content: Text(ok ? "Home screen shortcut requested!" : "Could not create shortcut"),
-                      ),
+                    _showHudNotification(
+                      ok ? "Home screen shortcut added!" : "Could not create shortcut",
+                      icon: Icons.add_to_home_screen,
+                      color: const Color(0xFFFF6D00),
                     );
                   } else if (value == 'clear_cache') {
                     await _service.clearCache(inst.instanceId, inst.packageName);
                     _loadData();
-                    messenger.showSnackBar(
-                      SnackBar(backgroundColor: const Color(0xFF1E2235), content: Text("Cleared cache for ${inst.appName}")),
-                    );
+                    _showHudNotification("Cleared cache for ${inst.appName}", icon: Icons.cleaning_services, color: const Color(0xFF00E5FF));
                   } else if (value == 'clear_data') {
                     final confirm = await _showConfirmDialog("Clear All Data", "Are you sure you want to wipe data for ${inst.appName}?");
                     if (confirm == true) {
                       await _service.clearData(inst.instanceId, inst.packageName);
                       _loadData();
-                      messenger.showSnackBar(
-                        SnackBar(backgroundColor: const Color(0xFF1E2235), content: Text("Wiped data for ${inst.appName}")),
-                      );
+                      _showHudNotification("Wiped data for ${inst.appName}", icon: Icons.delete_sweep, color: Colors.amberAccent);
                     }
                   } else if (value == 'delete') {
                     final confirm = await _showConfirmDialog("Delete Cloned App", "Permanently remove ${inst.appName} from Sandbox?");
                     if (confirm == true) {
                       await _service.deleteInstance(inst.instanceId);
                       _loadData();
-                      messenger.showSnackBar(
-                        SnackBar(backgroundColor: const Color(0xFF1E2235), content: Text("Deleted ${inst.appName}")),
-                      );
+                      _showHudNotification("Deleted ${inst.appName}", icon: Icons.delete_forever, color: Colors.redAccent);
                     }
                   }
                 },
@@ -702,7 +1038,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           const Divider(color: Color(0xFF1E2235), height: 1),
           const SizedBox(height: 10),
 
-          // Metadata row (Storage & Device profile)
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -712,7 +1047,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
           ),
           const SizedBox(height: 12),
 
-          // Primary Action: OPEN APP
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
@@ -730,11 +1064,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
               onPressed: () async {
                 final success = await _service.launchApp(inst.instanceId, inst.packageName);
                 if (!success && mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      backgroundColor: const Color(0xFF1E2235),
-                      content: Text("Could not open ${inst.appName}"),
-                    ),
+                  _showHudNotification(
+                    "Could not open ${inst.appName}",
+                    icon: Icons.error_outline,
+                    color: Colors.redAccent,
                   );
                 }
               },
@@ -746,7 +1079,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Widget _buildBadgedIcon(String iconBase64, String badgeColorHex) {
-    Color badgeColor = const Color(0xFFFF6D00); // Default Orange
+    Color badgeColor = const Color(0xFFFF6D00);
     try {
       badgeColor = Color(int.parse(badgeColorHex.replaceFirst('#', '0xFF')));
     } catch (_) {}
@@ -757,7 +1090,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
       child: Stack(
         clipBehavior: Clip.none,
         children: [
-          // Main app icon
           ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: iconBase64.isNotEmpty
@@ -770,7 +1102,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   )
                 : _fallbackAppIcon(),
           ),
-          // Circular badge with "SB" at bottom-left (Orange for Primary, Pink for Multi)
           Positioned(
             bottom: -2,
             left: -2,

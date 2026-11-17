@@ -123,6 +123,18 @@ class MainActivity : FlutterActivity() {
                     val ok = sandboxManager.provisionWorkProfile(this)
                     result.success(ok)
                 }
+                "removeWorkProfile" -> {
+                    val ok = sandboxManager.removeWorkProfile()
+                    result.success(ok)
+                }
+                "openWorkProfileAddAccount" -> {
+                    val ok = sandboxManager.openWorkProfileAddAccount()
+                    result.success(ok)
+                }
+                "getWorkProfileCoreApps" -> {
+                    val apps = sandboxManager.getWorkProfileCoreApps()
+                    result.success(apps)
+                }
                 "checkRealServicesStatus" -> {
                     val status = sandboxManager.checkRealServicesStatus()
                     result.success(status)
